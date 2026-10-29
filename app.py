@@ -1,7 +1,7 @@
 import streamlit as st
-from stmol import showmol
-import py3Dmol
+import streamlit.components.v1 as components
 from Bio.SeqUtils.ProtParam import ProteinAnalysis
+import json
 
 # 1. Page Configuration
 st.set_page_config(page_title="Bioinformatics 3D Portal", page_icon="🧬", layout="wide")
@@ -18,7 +18,31 @@ st.sidebar.header("📝 Step 2: Sequence Analytics")
 default_seq = "MSKGEELFTGVVPILVELDGDVNGHKFSVSGEGEGDATYGKLTLKFICTTGKLPVPWPTLVTTLTYGVQCFSRYPDHMKQHDFFKSAMPEGYVQERTIFFKDDGNYKTRAEVKFEGDTLVNRIELKGIDFKEDGNILGHKLEYNYNSHNVYIMADKQKNGIKVNFKIRHNIEDGSVQLADHYQQNTPIGDGPVLLPDNHYLSTQSALSKDPNEKRDHMVLLEFVTAAGITHGMDELYK"
 sequence_input = st.sidebar.text_area("Paste Raw Amino Acid Sequence (No FASTA header):", default_seq, height=150)
 
-# 3. Main Dashboard Logic
+# 3. Direct 3Dmol HTML Renderer (Bypasses stmol loading errors)
+def render_3d_molecule(pdb_data, style_type, color_theme):
+    pdb_json = json.dumps(pdb_data)
+    
+    if color_theme == "b-factor":
+        style_str = f"{{{style_type}: {{colorscheme: {{prop: 'b', gradient: 'roygb', min: 50, max: 90}}}}}}"
+    else:
+        style_str = f"{{{style_type}: {{color: '{color_theme}'}}}}"
+
+    html_code = f"""
+    <script src="https://cloudflare.com"></script>
+    <div id="container-01" style="width: 100%; height: 450px; position: relative; border-radius: 8px; overflow: hidden;"></div>
+    <script>
+        let element = document.querySelector('#container-01');
+        let config = {{ backgroundColor: '#ffffff' }};
+        let viewer = $3Dmol.createViewer(element, config);
+        viewer.addModel({pdb_json}, "pdb");
+        viewer.setStyle({{}}, {style_str});
+        viewer.zoomTo();
+        viewer.render();
+    </script>
+    """
+    components.html(html_code, height=460)
+
+# 4. Main Dashboard Logic
 if uploaded_file is not None:
     pdb_string = uploaded_file.getvalue().decode("utf-8")
     
@@ -31,22 +55,14 @@ if uploaded_file is not None:
         render_style = c1.selectbox("Render Style:", ["cartoon", "stick", "sphere"])
         color_scheme = c2.selectbox("Color Theme:", ["spectrum", "chain", "b-factor"])
         
-        # Render 3D Structure
-        viewer = py3Dmol.view(width=600, height=450)
-        viewer.addModel(pdb_string, 'pdb')
-        if color_scheme == "b-factor":
-            viewer.setStyle({render_style: {'colorscheme': {'prop': 'b', 'gradient': 'roygb', 'min': 50, 'max': 90}}})
-        else:
-            viewer.setStyle({render_style: {'color': color_scheme}})
-        viewer.zoomTo()
-        showmol(viewer, height=450, width=600)
+        # Render the 3D Molecule directly
+        render_3d_molecule(pdb_string, render_style, color_scheme)
         st.caption("💡 Tip: Use your mouse to rotate (left-click), zoom (scroll), and pan (right-click).")
         
     with col2:
         st.subheader("📊 Primary Sequence & Stability Metrics")
         
         if sequence_input:
-            # Clean sequence in case user pasted FASTA header or spaces
             clean_seq = "".join([line.strip() for line in sequence_input.splitlines() if not line.startswith(">")])
             clean_seq = clean_seq.replace(" ", "").upper()
             
