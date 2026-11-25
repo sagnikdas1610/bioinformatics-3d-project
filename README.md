@@ -1,105 +1,165 @@
-🧬 Bioinformatics 3D Project
-Explore protein structures in 3D, inspect protein sequences, and experiment with a structure-prediction workflow.
-![🚀 Open Live Demo](https://img.shields.io/badge/🚀_Open-Live_Demo-FF4B4B?style=for-the-badge)
-![Open in Colab](https://img.shields.io/badge/Google_Colab-Open_Prediction_Notebook-F9AB00?style=for-the-badge&logo=googlecolab&logoColor=white)
+# BioFold Workbench — Bioinformatics 3D Protein Structure & Analytics Platform
+
+[![Open Live App](https://img.shields.io/badge/Streamlit-Live_App-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white)](https://bioinformatics-3d-project-ai.streamlit.app/)
+[![Open in Colab](https://img.shields.io/badge/Google_Colab-Prediction_Notebook-F9AB00?style=for-the-badge&logo=googlecolab&logoColor=white)](https://colab.research.google.com/github/sagnikdas1610/bioinformatics-3d-project/blob/main/AI_Structure_Generator.ipynb)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat&logo=python&logoColor=white)
-![Streamlit](https://img.shields.io/badge/Built_with-Streamlit-FF4B4B?style=flat&logo=streamlit&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
-> **Try it online:** [Launch the Bioinformatics 3D Project](https://bioinformatics-3d-project-ai.streamlit.app/)  
-> **Structure-prediction workflow:** [Open the Google Colab notebook](https://colab.research.google.com/github/sagnikdas1610/bioinformatics-3d-project/blob/main/AI_Structure_Generator.ipynb)
+
+> **Live Application:** [https://bioinformatics-3d-project-ai.streamlit.app/](https://bioinformatics-3d-project-ai.streamlit.app/)
+> **Companion Prediction Notebook:** [AI_Structure_Generator.ipynb](https://colab.research.google.com/github/sagnikdas1610/bioinformatics-3d-project/blob/main/AI_Structure_Generator.ipynb)
+
 ---
-📌 Overview
-The Bioinformatics 3D Project is an educational web application for exploring protein structures and examining protein sequence properties. It combines an interactive Streamlit interface with a separate Google Colab notebook for experimenting with protein-structure prediction using ESMFold.
-The project is designed for students, learners, and anyone interested in structural bioinformatics. Upload a supported protein structure, explore its 3D representation, and inspect sequence-level measurements in one workspace.
-✨ Features
-Interactive 3D protein viewer — inspect uploaded protein structures in the browser.
-PDB structure upload — load supported `.pdb` files into the viewer.
-Protein sequence input — enter an amino-acid sequence in raw or FASTA format.
-Sequence analysis — examine supported protein properties and amino-acid composition.
-Structure exploration controls — use the molecular representations and coloring options available in the app.
-Prediction workflow — open the companion Google Colab notebook to run the separate structure-prediction workflow.
-Browser-based interface — access the deployed Streamlit app without installing the project locally.
-Feature availability depends on the current deployed version and the input structure.
-🖼️ Screenshots
-Screenshots help visitors understand the project before opening it. Add screenshots captured from the actual running application; do not use mockups as if they were real application output.
-Create a folder named `docs/screenshots/` in this repository, then upload these images:
-Screenshot	Suggested filename	What to capture
-Main dashboard	`dashboard.png`	Homepage and overall layout
-3D protein viewer	`protein-viewer.png`	A loaded structure, such as hemoglobin
-Sequence analysis	`sequence-analysis.png`	Sequence metrics and composition results
-Upload workflow	`upload-workflow.png`	PDB upload and controls
-After uploading the images, uncomment the image lines below (remove the `<!--` and `-->` markers):
-<!--
-### Main dashboard
-![Bioinformatics 3D Project dashboard](docs/screenshots/dashboard.png)
 
-### Interactive protein viewer
-![Interactive 3D protein viewer](docs/screenshots/protein-viewer.png)
+## Overview
 
-### Protein sequence analysis
-![Protein sequence analysis](docs/screenshots/sequence-analysis.png)
+**BioFold Workbench** is an open-source computational structural biology and protein analytics platform built with Python and Streamlit. It brings together interactive 3D molecular visualization, primary sequence biophysics, pairwise sequence alignment, coordinate-based structural validation (Ramachandran plots, Kabsch–Sander secondary structure, residue contact maps), transparent AI structure prediction integration (AlphaFold DB & ESMFold API), and downloadable scientific PDF reports in a single research-oriented workspace.
 
-### Structure upload workflow
-![PDB upload workflow](docs/screenshots/upload-workflow.png)
-🧰 Technology Stack
-Technology	Purpose
-Python	Application logic and analysis
-Streamlit	Interactive web interface and deployment
-Biopython	Protein sequence analysis utilities
-py3Dmol	Browser-based molecular visualization
-Google Colab / ESMFold workflow	Separate protein-structure prediction experiment
-🚀 Use the Live App
-Open the live website.
-Upload a supported `.pdb` structure file.
-If you want to analyze sequence properties, paste the matching amino-acid sequence into the sequence field.
-Explore the 3D structure and the analysis results provided by the app.
-Example structure files
-Download experimental structures from the RCSB Protein Data Bank:
-1CRN — Crambin
-1UBQ — Ubiquitin
-1LYZ — Lysozyme
-4HHB — Hemoglobin
-Use the sequence belonging to the chain you intend to analyze. A multi-chain PDB file may contain multiple protein chains; their sequences should not be combined unless the analysis specifically requires it.
-🧪 Run Locally
-Requirements
-Python installed on your computer
-Git (optional, for cloning the repository)
-An internet connection to install dependencies
-Installation
+---
+
+## Key Features
+
+- **Interactive 3D Molecular Explorer (`3Dmol.js`)**
+  - Supports **Cartoon**, **Stick**, **Ball & Stick**, and **Sphere** representations plus translucent **molecular surface** rendering.
+  - Color modes: **Secondary Structure**, **By Chain**, **N→C Spectrum**, **Experimental B-factor (Å²)**, and **Predicted pLDDT (0–100)** — strictly separated by structure provenance.
+  - Chain focus selector, residue number/range highlighting with labels, hetero-ligand display, camera reset, spin toggle, and PNG viewport export.
+  - Supports **PDB** (`.pdb`, `.ent`), **mmCIF** (`.cif`, `.mmcif`), bundled benchmark samples (`1UBQ`, `1CRN`), and live **RCSB PDB** fetching by 4-character ID.
+
+- **Primary Sequence Analytics**
+  - FASTA file upload, raw sequence input, and multi-FASTA record selection (never concatenating distinct entries).
+  - One-click sequence synchronization directly from any loaded 3D structure chain.
+  - Biopython `ProtParam` calculation of sequence length, molecular weight, theoretical pI, net charge at pH 7.0, GRAVY hydropathy, instability index, aromaticity, and molar extinction coefficients ($\varepsilon_{280}$ reduced/oxidized).
+  - Interactive amino-acid composition chart colored by physicochemical class, sliding-window **Kyte–Doolittle hydropathy profile**, and **net charge vs. pH curve**.
+
+- **Pairwise Sequence Alignment Studio**
+  - **Global (Needleman–Wunsch)** and **Local (Smith–Waterman)** alignments with **BLOSUM62**, **BLOSUM80**, **BLOSUM45**, **PAM250**, and **IDENTITY** scoring matrices and configurable gap open/extend penalties.
+  - Explicitly distinguishes **% Identity** (exact matches) from **% Similarity** (positive substitution-matrix pairs) and **% Gaps**, rendered in a color-coded monospace alignment viewer.
+
+- **Advanced Structural Analysis**
+  - **Model-1 & Conformer Discipline:** Separates standard polymer residues from hetero ligands and waters, deduplicates alternate conformations (`altLoc`) by highest occupancy, and evaluates Model 1 on multi-model NMR ensembles.
+  - **Missing-Residue Detection:** Parses `REMARK 465` (PDB) and `_pdbx_unobs_or_zero_occ_residues` (mmCIF), plus backbone numbering/peptide-bond continuity checks.
+  - **Ramachandran Plot:** Computes backbone $\phi/\psi/\omega$ dihedral angles with peptide-bond continuity checks and evaluates residues against genuine **Richardson Lab MolProbity Top8000** 6-class 2° probability distributions (*General*, *Ile/Val*, *Glycine*, *trans-Proline*, *cis-Proline*, *Pre-Proline*; Williams et al. 2018; Lovell et al. 2003; CC BY 4.0).
+  - **Secondary Structure Assignment:** Pure-Python **Kabsch–Sander (1983)** electrostatic backbone H-bond DSSP assignment (with PDB/mmCIF `HELIX`/`SHEET` header comparison when available).
+  - **Interactive Contact Map:** Vectorized Cα and Cβ distance/contact matrices with configurable Å cutoff and sequence separation (`|i - j|`), automatically using **Cα fallback for Glycine** in Cβ mode.
+
+- **AI-Assisted Structure Prediction (Honest Provenance)**
+  - **AlphaFold DB Lookup:** Fetches precomputed AlphaFold structures by UniProt accession and plots per-residue pLDDT confidence.
+  - **Live ESMFold API Folding:** Submits validated single-chain sequences (10–400 standard amino acids) to the public ESM Atlas API (`https://api.esmatlas.com/foldSequence/v1/pdb/`), normalizing pLDDT confidence to 0–100 with zero fake fallbacks on API errors.
+  - **ColabFold Links:** Direct workflow links for proteins >400 residues or multi-chain complexes.
+
+- **Publication-Style Scientific PDF & Data Exports**
+  - Generates downloadable **PDF reports** (`ReportLab` + `Matplotlib`) containing structure metadata, 3D Cα backbone projection, sequence/hydropathy charts, Ramachandran plot, secondary structure distribution, contact map, methodology, and limitations — explicitly distinguishing `[MEASURED]`, `[CALCULATED]`, `[AI-PREDICTED]`, and `[UNAVAILABLE]` data.
+  - Also exports plain-text `.txt` summaries, cleaned `.fasta`, `.pdb`/`.cif`, and alignment `.txt` files.
+
+---
+
+## Architecture
+
+```text
+bioinformatics-3d-project/
+├── app.py                        # Preserved Streamlit entry point
+├── requirements.txt              # Deployment dependencies
+├── .streamlit/config.toml        # Unified dark scientific theme
+├── data/
+│   ├── 1ubq_ubiquitin.pdb        # Experimental Ubiquitin benchmark (76 aa, 1.80 Å)
+│   ├── 1crn_crambin.pdb          # Experimental Crambin benchmark (46 aa, 1.50 Å)
+│   └── molprobity_top8000_rama.npz # Packed MolProbity Top8000 2-deg reference tables
+├── docs/screenshots/             # Verified application screenshots
+├── bio3d/                        # Pure-Python scientific core
+│   ├── config.py                 # Constants, AA tables, sample metadata
+│   ├── sequence.py               # FASTA parser, validation, ProtParam, hydropathy, charge curve
+│   ├── alignment.py              # PairwiseAligner / Gotoh affine-gap DP aligner
+│   ├── structure.py              # PDB & mmCIF parser (Model 1, altLoc, B-factor vs pLDDT, missing residues)
+│   ├── structural_analysis.py    # Ramachandran, Kabsch-Sander SS, Cα/Cβ contact maps
+│   ├── viewer.py                 # 3Dmol.js interactive HTML builder
+│   ├── prediction.py             # RCSB PDB, AlphaFold DB, ESMFold API clients
+│   ├── charts.py                 # Plotly scientific charts
+│   └── reporting.py              # ReportLab + Matplotlib PDF & TXT report generator
+├── ui/                           # Modular Streamlit UI components & tabs
+├── tests/                        # Pytest unit & scientific validation suite
+└── AI_Structure_Generator.ipynb  # Companion Google Colab ESMFold notebook
+```
+
+---
+
+## Technology Stack
+
+| Component | Technology |
+| :--- | :--- |
+| Web Interface | Streamlit |
+| 3D Molecular Visualization | 3Dmol.js |
+| Sequence Biophysics | Biopython (`ProtParam`) |
+| Alignment & Numerical Computing | Biopython (`PairwiseAligner`) / Gotoh DP, NumPy, Pandas |
+| Interactive Plots | Plotly |
+| Scientific PDF Reporting | ReportLab, Matplotlib |
+| External Data & Folding APIs | RCSB PDB, EMBL-EBI AlphaFold DB, Meta ESM Atlas ESMFold API |
+| Testing | Pytest |
+
+---
+
+## Supported File Formats
+
+- **Structures:** `.pdb`, `.ent`, `.cif`, `.mmcif` (up to 20 MiB)
+- **Sequences:** `.fasta`, `.fa`, `.faa`, `.txt`, or pasted raw/FASTA text
+
+---
+
+## Local Installation & Execution
+
 ```bash
 git clone https://github.com/sagnikdas1610/bioinformatics-3d-project.git
 cd bioinformatics-3d-project
 python -m pip install -r requirements.txt
-```
-Start the Streamlit app
-```bash
 python -m streamlit run app.py
 ```
-Streamlit will print a local URL, usually `http://localhost:8501`. Open that address in your browser.
-🧠 Protein-Structure Prediction Workflow
-The repository includes `AI_Structure_Generator.ipynb`, which can be opened in Google Colab.
-![Open in Google Colab](https://colab.research.google.com/assets/colab-badge.svg)
-Prediction is a separate workflow from the deployed visualization and sequence-analysis website. Successful prediction depends on the notebook, available compute resources, model/service availability, and the sequence supplied.
-⚠️ Scope and Limitations
-This is an educational project, not a substitute for specialist structural-bioinformatics validation.
-Visualizing an experimental PDB structure is different from predicting a new structure.
-A predicted structure should not be treated as experimentally confirmed.
-Results depend on the input sequence, PDB contents, and current app implementation.
-Large structures may require more time and browser resources to render.
-🔭 Future Improvements
-Add more sample structures and a clearer example gallery.
-Improve multi-chain selection and chain-specific sequence extraction.
-Add downloadable analysis reports and richer structure metadata.
-Provide clearer prediction status, confidence information, and error handling.
-Add automated tests and documented example outputs.
-Expand mobile responsiveness and accessibility.
-🤝 Contributions and Feedback
-Suggestions, bug reports, and improvements are welcome. Open an issue in this repository with a clear description of the problem or proposed enhancement.
-👨‍💻 Author
-Sagnik Das  
-Computer Science & Engineering student interested in Python, AI, and bioinformatics.
-GitHub: @sagnikdas1610
-Project repository: bioinformatics-3d-project
-Live demo: Open the web app
-📄 License
-This project is released under the MIT License.
+
+Run the automated test suite:
+
+```bash
+python -m pytest -v
+```
+
+---
+
+## Scientific Methods, Scope & Limitations
+
+- **No Local Model Inference:** The Streamlit server does not host large deep-learning weights locally; AI predictions rely on external public APIs (AlphaFold DB / ESMFold) or Google Colab, which may be rate-limited or unavailable.
+- **Predicted vs. Experimental Provenance:** Computational predictions (AlphaFold DB, ESMFold) are structural hypotheses rather than experimentally determined models. Predicted pLDDT confidence scores (0–100) and crystallographic B-factors ($\text{\AA}^2$) are kept strictly separate.
+- **Sequence Heuristics:** Descriptors such as the Guruprasad instability index and Kyte–Doolittle GRAVY are statistical sequence-derived heuristics and do not establish experimental stability or cellular localization.
+- **Stereochemical Validation:** Built-in Ramachandran (Lovell et al., 2003) and Kabsch–Sander secondary structure calculations provide rapid geometric diagnostics, not a full replacement for complete crystallographic validation suites such as MolProbity or RCSB validation reports.
+
+---
+
+## Screenshots
+
+Verified captures from the running platform are stored in [`docs/screenshots/`](docs/screenshots/):
+
+- [3D Molecular Explorer (`4HHB` Chain A)](docs/screenshots/01_3d_explorer.png)
+- [3D Explorer — AlphaFold `AF-P69905-F1` pLDDT coloring](docs/screenshots/08_3d_plddt_alphafold.png)
+- [Sequence Analytics (`1UBQ`)](docs/screenshots/02_sequence_analytics.png)
+- [Pairwise Sequence Alignment (`HBA` vs. `HBB`)](docs/screenshots/03_pairwise_alignment.png)
+- [Structural Analysis — Ramachandran Plot (MolProbity Top8000)](docs/screenshots/04_structural_ramachandran.png)
+- [Structural Analysis — Cβ Contact Map](docs/screenshots/05_structural_contact_map.png)
+- [AI Structure Prediction (AlphaFold DB & ESMFold API)](docs/screenshots/06_ai_prediction.png)
+- [Scientific PDF Reports & Exports](docs/screenshots/07_reports_exports.png)
+
+---
+
+## Deployment
+
+The live application is deployed on **Streamlit Community Cloud** at [https://bioinformatics-3d-project-ai.streamlit.app/](https://bioinformatics-3d-project-ai.streamlit.app/) using root `app.py` and `requirements.txt`.
+
+---
+
+## Data Attribution & Licensing
+
+- **Ramachandran Reference Tables:** `data/molprobity_top8000_rama.npz` packs the six Top8000 2°-binned probability tables (`General`, `Ile/Val`, `Glycine`, `trans-Proline`, `cis-Proline`, `Pre-Proline`) from the **Richardson Laboratory, Duke University** ([`rlabduke/reference_data`](https://github.com/rlabduke/reference_data)), used under the [Creative Commons Attribution 4.0 International (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/) license.
+  - Williams CJ et al. (2018), *MolProbity: More and better reference data for improved all-atom structure validation*, *Protein Science* 27:293–315.
+  - Lovell SC et al. (2003), *Structure validation by Cα geometry: φ,ψ and Cβ deviation*, *Proteins* 50:437–450.
+- **Benchmark Structures:** Experimental coordinates for `1UBQ` and `1CRN` are sourced from the [RCSB Protein Data Bank](https://www.rcsb.org/).
+
+---
+
+## Author & License
+
+**Sagnik Das** · GitHub: [@sagnikdas1610](https://github.com/sagnikdas1610)
+Released under the [MIT License](LICENSE).
