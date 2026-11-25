@@ -22,6 +22,7 @@ from bio3d.structural_analysis import (
 )
 from bio3d.structure import ParsedStructure, parse_structure
 from ui.sidebar import render_sidebar
+from ui.state import set_active_structure, sync_structure_fingerprint_guard
 from ui.styles import inject_scientific_styles
 from ui.tabs.alignment_tab import render_alignment_tab
 from ui.tabs.prediction_tab import render_prediction_tab
@@ -39,37 +40,58 @@ st.set_page_config(
 
 
 @st.cache_data(show_spinner=False, max_entries=16)
-def cached_parse_structure(raw_text: str, filename: str, origin_hint: str | None) -> ParsedStructure:
+def cached_parse_structure(
+    struct_hash: str,
+    raw_text: str,
+    filename: str,
+    origin_hint: str | None,
+) -> ParsedStructure:
+    _ = struct_hash
     return parse_structure(raw_text, filename=filename, origin_hint=origin_hint)
 
 
 @st.cache_data(show_spinner=False, max_entries=32)
-def cached_analyze_sequence(seq: str) -> SequenceProfile:
+def cached_analyze_sequence(seq_hash: str, seq: str) -> SequenceProfile:
+    _ = seq_hash
     return analyze_sequence(seq)
 
 
 @st.cache_data(show_spinner=False, max_entries=16)
-def cached_ramachandran(raw_text: str, filename: str, chain_id: str) -> RamachandranResult:
-    parsed = cached_parse_structure(raw_text, filename, None)
+def cached_ramachandran(
+    struct_hash: str,
+    raw_text: str,
+    filename: str,
+    origin_hint: str | None,
+    chain_id: str,
+) -> RamachandranResult:
+    parsed = cached_parse_structure(struct_hash, raw_text, filename, origin_hint)
     return compute_ramachandran(parsed, chain_id=None if chain_id == "All" else chain_id)
 
 
 @st.cache_data(show_spinner=False, max_entries=16)
-def cached_secondary_structure(raw_text: str, filename: str, chain_id: str) -> SecondaryStructureResult:
-    parsed = cached_parse_structure(raw_text, filename, None)
+def cached_secondary_structure(
+    struct_hash: str,
+    raw_text: str,
+    filename: str,
+    origin_hint: str | None,
+    chain_id: str,
+) -> SecondaryStructureResult:
+    parsed = cached_parse_structure(struct_hash, raw_text, filename, origin_hint)
     return compute_secondary_structure(parsed, chain_id=None if chain_id == "All" else chain_id)
 
 
 @st.cache_data(show_spinner=False, max_entries=24)
 def cached_contact_map(
+    struct_hash: str,
     raw_text: str,
     filename: str,
+    origin_hint: str | None,
     chain_id: str,
     atom_mode: str,
     threshold: float,
     min_seq_sep: int,
 ) -> ContactMapResult:
-    parsed = cached_parse_structure(raw_text, filename, None)
+    parsed = cached_parse_structure(struct_hash, raw_text, filename, origin_hint)
     return compute_contact_map(
         parsed,
         chain_id=chain_id,
@@ -85,10 +107,12 @@ def _init_default_structure() -> None:
     default_entry = next(iter(BUNDLED_STRUCTURES.values()))
     default_path = Path(default_entry["path"])
     if default_path.exists():
-        st.session_state["structure_raw"] = default_path.read_text(encoding="utf-8", errors="replace")
-        st.session_state["structure_filename"] = default_path.name
-        st.session_state["structure_origin_hint"] = "experimental"
-        st.session_state["structure_error"] = None
+        set_active_structure(
+            default_path.read_text(encoding="utf-8", errors="replace"),
+            default_path.name,
+            "experimental",
+            reset_sequence_mode=True,
+        )
     else:
         st.session_state["structure_raw"] = ""
         st.session_state["structure_filename"] = ""
@@ -98,6 +122,7 @@ def _init_default_structure() -> None:
 
 inject_scientific_styles()
 _init_default_structure()
+current_struct_fp = sync_structure_fingerprint_guard()
 
 parsed_structure: ParsedStructure | None = None
 raw_struct = st.session_state.get("structure_raw", "")
@@ -106,12 +131,12 @@ origin_hint = st.session_state.get("structure_origin_hint")
 
 if raw_struct:
     try:
-        parsed_structure = cached_parse_structure(raw_struct, fname_struct, origin_hint)
+        parsed_structure = cached_parse_structure(current_struct_fp, raw_struct, fname_struct, origin_hint)
     except Exception as exc:
         st.session_state["structure_error"] = f"Structure parse failed: {exc}"
         parsed_structure = None
 
-active_sequence, active_seq_label = render_sidebar(parsed_structure)
+seq_ctx = render_sidebar(parsed_structure)
 
 # ── Compact scientific header ──────────────────────────────────────────────────
 if parsed_structure is not None:
@@ -152,10 +177,10 @@ NAV_SECTIONS = [
     "Reports & Exports",
 ]
 
+st.session_state.setdefault("main_nav_section", "3D Explorer")
 active_section = st.segmented_control(
     "Workspace section",
     options=NAV_SECTIONS,
-    default="3D Explorer",
     label_visibility="collapsed",
     key="main_nav_section",
 )
@@ -165,18 +190,26 @@ if active_section is None:
 if active_section == "3D Explorer":
     render_viewer_tab(parsed_structure)
 elif active_section == "Sequence Analytics":
-    render_sequence_tab(active_sequence, active_seq_label, parsed_structure, cached_analyze_sequence)
+    render_sequence_tab(seq_ctx, parsed_structure, cached_analyze_sequence)
 elif active_section == "Pairwise Alignment":
-    render_alignment_tab(active_sequence)
+    render_alignment_tab(seq_ctx, current_struct_fp)
 elif active_section == "Structural Analysis":
-    render_structure_tab(parsed_structure, cached_ramachandran, cached_secondary_structure, cached_contact_map)
+    render_structure_tab(
+        parsed_structure,
+        current_struct_fp,
+        origin_hint,
+        cached_ramachandran,
+        cached_secondary_structure,
+        cached_contact_map,
+    )
 elif active_section == "AI Structure Prediction":
-    render_prediction_tab(active_sequence)
+    render_prediction_tab(seq_ctx)
 else:
     render_report_tab(
         parsed_structure,
-        active_sequence,
-        active_seq_label,
+        seq_ctx,
+        current_struct_fp,
+        origin_hint,
         cached_analyze_sequence,
         cached_ramachandran,
         cached_secondary_structure,

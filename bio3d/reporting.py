@@ -5,7 +5,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from io import BytesIO
 import os
+from pathlib import Path
 import tempfile
+from xml.sax.saxutils import escape as xml_escape
 
 os.environ.setdefault("MPLCONFIGDIR", os.path.join(tempfile.gettempdir(), "biofold_mpl"))
 
@@ -18,9 +20,14 @@ from reportlab.lib import colors  # noqa: E402
 from reportlab.lib.pagesizes import LETTER  # noqa: E402
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet  # noqa: E402
 from reportlab.lib.units import inch  # noqa: E402
+from reportlab.pdfbase import pdfmetrics  # noqa: E402
+from reportlab.pdfbase.pdfmetrics import registerFontFamily  # noqa: E402
+from reportlab.pdfbase.ttfonts import TTFont  # noqa: E402
 from reportlab.platypus import (  # noqa: E402
     HRFlowable,
     Image,
+    KeepTogether,
+    PageBreak,
     Paragraph,
     SimpleDocTemplate,
     Spacer,
@@ -39,6 +46,159 @@ from bio3d.structural_analysis import (
 )
 from bio3d.structure import ParsedStructure
 
+USABLE_WIDTH = 7.20 * inch  # LETTER (8.5 in) - 2 * 0.65 in margin
+
+
+def _register_unicode_fonts() -> tuple[str, str]:
+    """Register Unicode-capable DejaVu Sans fonts bundled with Matplotlib."""
+    font_dir = Path(matplotlib.__file__).resolve().parent / "mpl-data" / "fonts" / "ttf"
+    reg_ttf = font_dir / "DejaVuSans.ttf"
+    bold_ttf = font_dir / "DejaVuSans-Bold.ttf"
+    if reg_ttf.exists() and bold_ttf.exists():
+        if "BioSans" not in pdfmetrics.getRegisteredFontNames():
+            pdfmetrics.registerFont(TTFont("BioSans", str(reg_ttf)))
+        if "BioSans-Bold" not in pdfmetrics.getRegisteredFontNames():
+            pdfmetrics.registerFont(TTFont("BioSans-Bold", str(bold_ttf)))
+        registerFontFamily("BioSans", normal="BioSans", bold="BioSans-Bold")
+        return "BioSans", "BioSans-Bold"
+    return "Helvetica", "Helvetica-Bold"
+
+
+FONT_REG, FONT_BOLD = _register_unicode_fonts()
+
+
+def _build_pdf_styles() -> dict[str, ParagraphStyle]:
+    base = getSampleStyleSheet()
+    return {
+        "h1": ParagraphStyle(
+            "BFH1",
+            parent=base["Heading1"],
+            fontName=FONT_BOLD,
+            fontSize=15.5,
+            leading=19,
+            textColor=colors.HexColor("#0f172a"),
+            spaceAfter=4,
+        ),
+        "h2": ParagraphStyle(
+            "BFH2",
+            parent=base["Heading2"],
+            fontName=FONT_BOLD,
+            fontSize=11,
+            leading=14.5,
+            textColor=colors.HexColor("#0369a1"),
+            spaceBefore=10,
+            spaceAfter=5,
+            keepWithNext=True,
+        ),
+        "body": ParagraphStyle(
+            "BFBody",
+            parent=base["Normal"],
+            fontName=FONT_REG,
+            fontSize=8.8,
+            leading=12.5,
+            textColor=colors.HexColor("#1e293b"),
+        ),
+        "warn": ParagraphStyle(
+            "BFWarn",
+            parent=base["Normal"],
+            fontName=FONT_BOLD,
+            fontSize=8.5,
+            leading=12.0,
+            textColor=colors.HexColor("#b45309"),
+        ),
+        "muted": ParagraphStyle(
+            "BFMuted",
+            parent=base["Normal"],
+            fontName=FONT_REG,
+            fontSize=8.0,
+            leading=11.5,
+            textColor=colors.HexColor("#475569"),
+        ),
+        "th": ParagraphStyle(
+            "BFTableHeader",
+            parent=base["Normal"],
+            fontName=FONT_BOLD,
+            fontSize=8.2,
+            leading=10.8,
+            textColor=colors.white,
+        ),
+        "td_label": ParagraphStyle(
+            "BFTableLabel",
+            parent=base["Normal"],
+            fontName=FONT_BOLD,
+            fontSize=8.1,
+            leading=11.0,
+            textColor=colors.HexColor("#0f172a"),
+            wordWrap="LTR",
+        ),
+        "td_val": ParagraphStyle(
+            "BFTableValue",
+            parent=base["Normal"],
+            fontName=FONT_REG,
+            fontSize=8.1,
+            leading=11.0,
+            textColor=colors.HexColor("#1e293b"),
+            wordWrap="LTR",
+        ),
+        "td_prov": ParagraphStyle(
+            "BFTableProv",
+            parent=base["Normal"],
+            fontName=FONT_BOLD,
+            fontSize=7.6,
+            leading=10.5,
+            textColor=colors.HexColor("#334155"),
+            wordWrap="LTR",
+        ),
+    }
+
+
+def _safe_xml(text: object) -> str:
+    return xml_escape(str(text))
+
+
+def _styled_table(
+    rows: list[list[str]],
+    col_widths: list[float],
+    styles: dict[str, ParagraphStyle],
+    markup_cols: set[int] | None = None,
+) -> Table:
+    """Create a ReportLab table where every cell is a wrapped Paragraph to prevent overlap."""
+    markup_cols = markup_cols or set()
+    wrapped_rows: list[list[Paragraph]] = []
+    for r_idx, row in enumerate(rows):
+        wrapped_row: list[Paragraph] = []
+        for c_idx, cell in enumerate(row):
+            if r_idx == 0:
+                p_style = styles["th"]
+                content = _safe_xml(cell)
+            else:
+                if c_idx == 0:
+                    p_style = styles["td_label"]
+                elif c_idx == len(row) - 1 and len(row) == 3:
+                    p_style = styles["td_prov"]
+                else:
+                    p_style = styles["td_val"]
+                content = str(cell) if c_idx in markup_cols else _safe_xml(cell)
+            wrapped_row.append(Paragraph(content, p_style))
+        wrapped_rows.append(wrapped_row)
+
+    table = Table(wrapped_rows, colWidths=col_widths, repeatRows=1)
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0f172a")),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
+                ("GRID", (0, 0), (-1, -1), 0.45, colors.HexColor("#cbd5e1")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ]
+        )
+    )
+    return table
+
 
 def _fig_to_png_bytes(fig: plt.Figure, dpi: int = 160) -> BytesIO:
     buf = BytesIO()
@@ -54,10 +214,11 @@ def _make_backbone_3d_figure(parsed: ParsedStructure) -> BytesIO | None:
     if not has_ca:
         return None
 
-    fig = plt.figure(figsize=(5.4, 3.6))
+    fig = plt.figure(figsize=(5.4, 3.3))
     ax = fig.add_subplot(111, projection="3d")
     palette = ["#0284c7", "#7c3aed", "#059669", "#d97706", "#dc2626", "#0d9488"]
 
+    plotted_chains = 0
     for idx, ch in enumerate(parsed.chains):
         pts = [r.atoms["CA"].coord for r in parsed.polymer_residues[ch] if "CA" in r.atoms]
         if len(pts) < 2:
@@ -65,13 +226,14 @@ def _make_backbone_3d_figure(parsed: ParsedStructure) -> BytesIO | None:
         arr = np.vstack(pts)
         ax.plot(arr[:, 0], arr[:, 1], arr[:, 2], linewidth=1.8, color=palette[idx % len(palette)], label=f"Chain {ch}")
         ax.scatter(arr[0, 0], arr[0, 1], arr[0, 2], color="#16a34a", s=24)
+        plotted_chains += 1
 
     ax.set_title(f"Cα Backbone Trace — {parsed.pdb_id or parsed.filename}", fontsize=10, fontweight="bold")
     ax.set_xlabel("X (Å)", fontsize=8)
     ax.set_ylabel("Y (Å)", fontsize=8)
     ax.set_zlabel("Z (Å)", fontsize=8)
     ax.tick_params(labelsize=7)
-    if len(parsed.chains) <= 6:
+    if 0 < plotted_chains <= 6:
         ax.legend(fontsize=7, loc="upper right")
     return _fig_to_png_bytes(fig)
 
@@ -82,7 +244,7 @@ def _make_sequence_figure(
 ) -> BytesIO:
     """Render amino-acid composition and Kyte-Doolittle hydropathy figures."""
     ncols = 2 if hydropathy and len(hydropathy[0]) > 1 else 1
-    fig, axes = plt.subplots(1, ncols, figsize=(7.0 if ncols == 2 else 5.2, 2.7))
+    fig, axes = plt.subplots(1, ncols, figsize=(7.0 if ncols == 2 else 5.2, 2.55))
     ax1 = axes[0] if ncols == 2 else axes
 
     aas = list(STANDARD_AA)
@@ -112,7 +274,7 @@ def _make_sequence_figure(
 
 def _make_ramachandran_figure(rama: RamachandranResult) -> BytesIO:
     """Render Matplotlib Ramachandran plot with MolProbity Top8000 contours."""
-    fig, ax = plt.subplots(figsize=(4.4, 4.0))
+    fig, ax = plt.subplots(figsize=(4.4, 3.8))
     phis_g, psis_g, z_g = rama_background_grid("General")
     ax.contourf(phis_g, psis_g, z_g, levels=[-0.5, 0.5, 1.5, 2.5], colors=["#f8fafc", "#dbeafe", "#93c5fd"], alpha=0.8)
     ax.axhline(0, color="#94a3b8", linewidth=0.6)
@@ -131,7 +293,8 @@ def _make_ramachandran_figure(rama: RamachandranResult) -> BytesIO:
     ax.set_ylabel("ψ (deg)", fontsize=8.5)
     ax.set_title("Ramachandran Plot (MolProbity Top8000 General)", fontsize=9.2, fontweight="bold")
     ax.tick_params(labelsize=7.5)
-    ax.legend(fontsize=7.5, loc="upper right")
+    if ax.get_legend_handles_labels()[0]:
+        ax.legend(fontsize=7.5, loc="upper right")
     fig.tight_layout()
     return _fig_to_png_bytes(fig)
 
@@ -144,7 +307,7 @@ def _make_ss_and_contact_figure(
     if ss is None and cmap is None:
         return None
     ncols = 2 if (ss is not None and cmap is not None) else 1
-    fig, axes = plt.subplots(1, ncols, figsize=(7.0 if ncols == 2 else 4.8, 3.0))
+    fig, axes = plt.subplots(1, ncols, figsize=(7.0 if ncols == 2 else 4.8, 2.9))
 
     idx = 0
     if ss is not None:
@@ -174,26 +337,24 @@ def _make_ss_and_contact_figure(
     return _fig_to_png_bytes(fig)
 
 
-def _styled_table(rows: list[list[str]], col_widths: list[float]) -> Table:
-    table = Table(rows, colWidths=col_widths)
-    table.setStyle(
-        TableStyle(
-            [
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0f172a")),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("FONTSIZE", (0, 0), (-1, -1), 8.5),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
-                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cbd5e1")),
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-                ("TOPPADDING", (0, 0), (-1, -1), 4),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-            ]
-        )
-    )
-    return table
+def _draw_page_footer(canvas, doc) -> None:
+    canvas.saveState()
+    canvas.setFont(FONT_REG, 7.5)
+    canvas.setFillColor(colors.HexColor("#64748b"))
+    canvas.drawString(0.65 * inch, 0.40 * inch, f"{APP_NAME} v{APP_VERSION} — Computational Structural & Sequence Report")
+    canvas.drawRightString(LETTER[0] - 0.65 * inch, 0.40 * inch, f"Page {doc.page}")
+    canvas.restoreState()
+
+
+def _format_seq_source_label(sequence_source: str | None, report_chain: str | None) -> str:
+    if sequence_source == "structure":
+        ch = f" (Chain {report_chain})" if report_chain else ""
+        return f"Derived from active 3D structure coordinates{ch}"
+    if sequence_source == "custom_fasta":
+        return "Independent uploaded / manual FASTA input"
+    if sequence_source == "unavailable":
+        return "Unavailable"
+    return "Active session sequence"
 
 
 def generate_pdf_report(
@@ -205,150 +366,230 @@ def generate_pdf_report(
     ss: SecondaryStructureResult | None = None,
     contact_map: ContactMapResult | None = None,
     report_title: str | None = None,
+    sequence_name: str | None = None,
+    sequence_source: str | None = None,
+    sequence_mismatch_warning: str | None = None,
+    sequence_unavailable_reason: str | None = None,
+    report_chain: str | None = None,
 ) -> bytes:
-    """Build a publication-style scientific PDF report distinguishing measured/calculated/predicted data."""
+    """Build a publication-style scientific PDF report with wrapped tables and Unicode typography."""
     buffer = BytesIO()
     doc = SimpleDocTemplate(
         buffer,
         pagesize=LETTER,
         leftMargin=0.65 * inch,
         rightMargin=0.65 * inch,
-        topMargin=0.65 * inch,
+        topMargin=0.60 * inch,
         bottomMargin=0.65 * inch,
         title=f"{APP_NAME} Scientific Report",
     )
 
-    styles = getSampleStyleSheet()
-    h1 = ParagraphStyle("BFH1", parent=styles["Heading1"], fontSize=16, textColor=colors.HexColor("#0f172a"), spaceAfter=4)
-    h2 = ParagraphStyle("BFH2", parent=styles["Heading2"], fontSize=11.5, textColor=colors.HexColor("#0369a1"), spaceBefore=10, spaceAfter=4)
-    body = ParagraphStyle("BFBody", parent=styles["Normal"], fontSize=9, leading=12.5, textColor=colors.HexColor("#1e293b"))
-    muted = ParagraphStyle("BFMuted", parent=styles["Normal"], fontSize=8, leading=11, textColor=colors.HexColor("#475569"))
+    styles = _build_pdf_styles()
+    col3_widths = [1.85 * inch, 3.95 * inch, 1.40 * inch]  # sum = 7.20 in
 
     story: list[object] = []
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-    story.append(Paragraph(report_title or f"{APP_NAME} — Structural & Sequence Analysis Report", h1))
-    story.append(Paragraph(f"Generated: {timestamp} | Platform v{APP_VERSION} | Provenance tags distinguish [MEASURED], [CALCULATED], [AI-PREDICTED], and [UNAVAILABLE] fields.", muted))
-    story.append(Spacer(1, 6))
+    story.append(Paragraph(_safe_xml(report_title or f"{APP_NAME} — Structural & Sequence Analysis Report"), styles["h1"]))
+    story.append(
+        Paragraph(
+            f"Generated: {timestamp} | Platform v{APP_VERSION} | Provenance column distinguishes Experimental (Measured), Calculated, AI-Predicted, Reference, and Unavailable data.",
+            styles["muted"],
+        )
+    )
+    story.append(Spacer(1, 5))
     story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#cbd5e1")))
     story.append(Spacer(1, 8))
 
     # 1. Structure Identification & Quality
-    story.append(Paragraph("1. Structure Identification & Quality Summary", h2))
+    sec1_head = Paragraph("1. Structure Identification & Quality Summary", styles["h2"])
     if parsed is not None:
         origin_label = ORIGIN_LABELS.get(parsed.structure_origin, parsed.structure_origin)
-        prov_tag = "[AI-PREDICTED]" if parsed.is_predicted else "[MEASURED / FILE RECORD]"
+        origin_prov = "AI-Predicted" if parsed.is_predicted else ("Experimental (Measured)" if parsed.experimental_method else "File Record")
+        chain_breakdown = ", ".join(f"{ch}: {len(res)} aa" for ch, res in parsed.polymer_residues.items())
         struct_rows = [
             ["Field", "Value", "Provenance"],
-            ["Source File", parsed.filename, "[FILE]"],
-            ["Origin Classification", origin_label, prov_tag],
-            ["PDB / Entry ID", parsed.pdb_id or "Unavailable in file header", "[MEASURED]" if parsed.pdb_id else "[UNAVAILABLE]"],
-            ["Experimental Method", parsed.experimental_method or ("Computational prediction" if parsed.is_predicted else "Unavailable"), "[MEASURED]" if parsed.experimental_method else "[UNAVAILABLE]"],
-            ["Resolution", f"{parsed.resolution_angstrom:.2f} Å" if parsed.resolution_angstrom is not None else "Unavailable (not reported / non-diffraction)", "[MEASURED]" if parsed.resolution_angstrom is not None else "[UNAVAILABLE]"],
-            ["Polymer Chains / Residues", f"{len(parsed.chains)} ({', '.join(parsed.chains)}) / {parsed.polymer_residue_count} aa", "[CALCULATED]"],
-            ["Polymer Atoms (Model 1)", f"{parsed.polymer_atom_count:,} (models in file: {parsed.model_count})", "[CALCULATED]"],
-            ["Hetero Ligands / Waters", f"{parsed.hetero_ligand_count} ({', '.join(parsed.hetero_ligand_names) or 'none'}) / {parsed.water_count} waters", "[CALCULATED]"],
-            ["Missing Residues Check", parsed.missing_residue_note, "[FILE / CALCULATED]"],
+            ["Source File", f"{_safe_xml(parsed.filename)} ({parsed.file_format.upper()})", "File Record"],
+            ["Origin Classification", _safe_xml(origin_label), origin_prov],
+            [
+                "PDB / Entry ID",
+                _safe_xml(parsed.pdb_id) if parsed.pdb_id else "Unavailable in file header",
+                "Experimental (Measured)" if (parsed.pdb_id and not parsed.is_predicted) else ("AI-Predicted" if parsed.pdb_id else "Unavailable"),
+            ],
+            [
+                "Experimental Method",
+                _safe_xml(parsed.experimental_method) if parsed.experimental_method else ("Computational model (not experimental)" if parsed.is_predicted else "Unavailable"),
+                "Experimental (Measured)" if parsed.experimental_method else "Unavailable",
+            ],
+            [
+                "Resolution",
+                f"{parsed.resolution_angstrom:.2f} Å" if parsed.resolution_angstrom is not None else "Unavailable (not reported / non-diffraction)",
+                "Experimental (Measured)" if parsed.resolution_angstrom is not None else "Unavailable",
+            ],
+            [
+                "Polymer Chains / Residues",
+                f"{len(parsed.chains)} ({_safe_xml(chain_breakdown)}) | Total: {parsed.polymer_residue_count} aa",
+                "Calculated (Structure)",
+            ],
+            ["Polymer Atoms (Model 1)", f"{parsed.polymer_atom_count:,} protein atoms (models in file: {parsed.model_count})", "Calculated (Structure)"],
+            ["Water Molecules (HOH)", f"{parsed.water_count:,} waters", "Calculated (Structure)"],
+            [
+                "Hetero Ligands (Non-Water)",
+                f"{parsed.hetero_ligand_count:,} ({_safe_xml(', '.join(parsed.hetero_ligand_names) or 'none')})",
+                "Calculated (Structure)",
+            ],
+            ["Missing Residues Check", _safe_xml(parsed.missing_residue_note), "File / Calculated"],
         ]
+        if parsed.modified_residues_mapped or parsed.unmapped_polymer_residues:
+            notes = "; ".join(parsed.chain_extraction_notes.values())
+            struct_rows.append(["Polymer Residue Mapping", _safe_xml(notes), "Calculated (Structure)"])
+
         if parsed.is_predicted and parsed.plddt_stats:
             ps = parsed.plddt_stats
             struct_rows.append([
                 "pLDDT Confidence (0–100)",
-                f"Mean {ps['mean']:.1f} | Median {ps['median']:.1f} | ≥90: {ps['pct_very_high']:.1f}% | <50: {ps['pct_very_low']:.1f}% (raw scale: {ps['raw_scale']})",
-                "[AI-PREDICTED]",
+                f"Mean {ps['mean']:.1f} | Median {ps['median']:.1f} | ≥90: {ps['pct_very_high']:.1f}% | &lt;50: {ps['pct_very_low']:.1f}% (raw scale: {_safe_xml(ps['raw_scale'])})",
+                "AI-Predicted",
             ])
         elif parsed.bfactor_stats:
             bs = parsed.bfactor_stats
+            b_summary = (
+                f"Cα: mean {bs['mean']:.2f}, median {bs['median']:.2f}, range {bs['min']:.2f}–{bs['max']:.2f} Å<sup>2</sup>"
+            )
+            if "all_atom_mean" in bs:
+                b_summary += (
+                    f" | All polymer atoms ({bs['all_atom_count']:,}): mean {bs['all_atom_mean']:.2f}, "
+                    f"range {bs['all_atom_min']:.2f}–{bs['all_atom_max']:.2f} Å<sup>2</sup> "
+                    f"(Occupancy cols 55–60: {bs['occupancy_min']:.2f}–{bs['occupancy_max']:.2f})"
+                )
             struct_rows.append([
-                "Experimental B-factor (Å²)",
-                f"Mean {bs['mean']:.2f} | Median {bs['median']:.2f} | Range {bs['min']:.2f}–{bs['max']:.2f} Å²",
-                "[MEASURED]",
+                "Experimental B-factor",
+                b_summary,
+                "Experimental (Measured)",
             ])
-        story.append(_styled_table(struct_rows, [1.65 * inch, 4.15 * inch, 1.35 * inch]))
+        sec1_table = _styled_table(struct_rows, col3_widths, styles, markup_cols={1})
+        story.append(KeepTogether([sec1_head, sec1_table]))
         backbone_png = _make_backbone_3d_figure(parsed)
         if backbone_png:
-            story.append(Spacer(1, 6))
-            story.append(Image(backbone_png, width=4.6 * inch, height=3.05 * inch))
+            story.append(Spacer(1, 8))
+            story.append(Image(backbone_png, width=4.5 * inch, height=2.75 * inch))
     else:
-        story.append(Paragraph("[UNAVAILABLE] No 3D structure was loaded during this session.", body))
+        story.append(KeepTogether([sec1_head, Paragraph("[Unavailable] No 3D structure was loaded during this session.", styles["body"])]))
 
     # 2. Primary Sequence Statistics
-    story.append(Paragraph("2. Primary Sequence & Molecular Properties", h2))
+    sec2_head = Paragraph("2. Primary Sequence & Molecular Properties", styles["h2"])
+    src_desc = _format_seq_source_label(sequence_source, report_chain)
     if seq_profile is not None:
+        match_status = "No structure loaded"
+        if parsed is not None:
+            matched = [ch for ch, s in parsed.chain_sequences.items() if s == seq_profile.sequence]
+            match_status = f"Exact match to Chain {', '.join(matched)}" if matched else f"Independent sequence (differs from {parsed.filename} chains)"
+
         seq_rows = [
             ["Descriptor", "Value", "Provenance"],
-            ["Length", f"{seq_profile.length} amino acids", "[CALCULATED]"],
-            ["Molecular Weight (avg mass, reduced Cys)", f"{seq_profile.molecular_weight_da:,.2f} Da ({seq_profile.molecular_weight_kda:.2f} kDa)", "[CALCULATED]"],
-            ["Theoretical Isoelectric Point (pI)", f"{seq_profile.theoretical_pi:.2f}", "[CALCULATED]"],
-            ["GRAVY Hydropathy (Kyte-Doolittle)", f"{seq_profile.gravy:.3f}", "[CALCULATED]"],
-            ["Instability Index (Guruprasad heuristic)", f"{seq_profile.instability_index:.2f} ({seq_profile.instability_class})", "[CALCULATED]"],
-            ["Aromaticity (Phe+Trp+Tyr fraction)", f"{seq_profile.aromaticity:.3f}", "[CALCULATED]"],
-            ["Molar Extinction (280 nm, red / ox)", f"{seq_profile.extinction_reduced:,} / {seq_profile.extinction_oxidized:,} M⁻¹cm⁻¹", "[CALCULATED]"],
-            ["Estimated Net Charge at pH 7.0", f"{seq_profile.net_charge_ph7:+.2f}", "[CALCULATED]"],
+            ["Sequence Source", _safe_xml(src_desc), "Session Provenance"],
+            ["Sequence Label / Match", f"{_safe_xml(sequence_name or 'Active sequence')} — {_safe_xml(match_status)}", "File / Calculated"],
+            ["Length", f"{seq_profile.length} amino acids", "Calculated (Sequence)"],
+            ["Molecular Weight (avg, red. Cys)", f"{seq_profile.molecular_weight_da:,.2f} Da ({seq_profile.molecular_weight_kda:.2f} kDa)", "Calculated (Sequence)"],
+            ["Theoretical Isoelectric Point (pI)", f"{seq_profile.theoretical_pi:.2f}", "Calculated (Sequence)"],
+            ["GRAVY Hydropathy (Kyte-Doolittle)", f"{seq_profile.gravy:.3f}", "Calculated (Sequence)"],
+            ["Instability Index (Guruprasad)", f"{seq_profile.instability_index:.2f} ({_safe_xml(seq_profile.instability_class)})", "Calculated (Sequence)"],
+            ["Aromaticity (Phe+Trp+Tyr)", f"{seq_profile.aromaticity:.3f}", "Calculated (Sequence)"],
+            ["Molar Extinction (280 nm, red / ox)", f"{seq_profile.extinction_reduced:,} / {seq_profile.extinction_oxidized:,} M<sup>-1</sup> cm<sup>-1</sup>", "Calculated (Sequence)"],
+            ["Estimated Net Charge at pH 7.0", f"{seq_profile.net_charge_ph7:+.2f}", "Calculated (Sequence)"],
         ]
-        story.append(_styled_table(seq_rows, [2.3 * inch, 3.5 * inch, 1.35 * inch]))
-        story.append(Spacer(1, 6))
+        if sequence_mismatch_warning:
+            seq_rows.insert(3, ["Sequence–Structure Warning", f"<b>{_safe_xml(sequence_mismatch_warning)}</b>", "Integrity Check"])
+
+        sec2_table = _styled_table(seq_rows, col3_widths, styles, markup_cols={1})
+        story.append(KeepTogether([sec2_head, sec2_table]))
+        story.append(Spacer(1, 8))
         seq_fig = _make_sequence_figure(seq_profile, hydropathy)
-        story.append(Image(seq_fig, width=6.7 * inch, height=2.55 * inch))
+        story.append(Image(seq_fig, width=6.6 * inch, height=2.40 * inch))
     else:
-        story.append(Paragraph("[UNAVAILABLE] No valid standard amino-acid sequence was analyzed.", body))
+        reason = sequence_unavailable_reason or "No valid standard amino-acid sequence was analyzed."
+        story.append(KeepTogether([sec2_head, Paragraph(f"[UNAVAILABLE] {_safe_xml(reason)}", styles["body"])]))
 
     # 3. Pairwise Alignment
-    story.append(Paragraph("3. Pairwise Sequence Alignment", h2))
+    sec3_head = Paragraph("3. Pairwise Sequence Alignment", styles["h2"])
     if alignment is not None:
+        s1_acc = alignment.seq1_accession or "None (unannotated input)"
+        s2_acc = alignment.seq2_accession or "None (unannotated input)"
         aln_rows = [
             ["Metric", "Value", "Provenance"],
-            ["Mode & Scoring Matrix", f"{alignment.mode.capitalize()} | {alignment.matrix_name} (gap open={alignment.open_gap_score}, ext={alignment.extend_gap_score})", "[CALCULATED]"],
-            ["Alignment Score", f"{alignment.score:.1f} (Engine: {alignment.engine})", "[CALCULATED]"],
-            ["Sequence Identity (aligned columns)", f"{alignment.identity_pct:.2f}% ({alignment.identical_count}/{alignment.alignment_length})", "[CALCULATED]"],
-            ["Sequence Similarity (score > 0)", f"{alignment.similarity_pct:.2f}% ({alignment.similar_count}/{alignment.alignment_length})", "[CALCULATED]"],
-            ["Gaps", f"{alignment.gap_pct:.2f}% ({alignment.gap_count} positions)", "[CALCULATED]"],
+            ["Sequence A", f"{alignment.seq1_name} | Accession: {s1_acc} | Length: {alignment.seq1_length} aa (aligned span {alignment.seq1_span[0]}–{alignment.seq1_span[1]})", "Input Metadata"],
+            ["Sequence B", f"{alignment.seq2_name} | Accession: {s2_acc} | Length: {alignment.seq2_length} aa (aligned span {alignment.seq2_span[0]}–{alignment.seq2_span[1]})", "Input Metadata"],
+            ["Alignment Mode", f"{alignment.mode.capitalize()} ({'Needleman–Wunsch' if alignment.mode == 'global' else 'Smith–Waterman'})", "Calculated (Alignment)"],
+            ["Scoring Matrix & Gap Penalties", f"{alignment.matrix_name} | Gap open = {alignment.open_gap_score} | Gap extend = {alignment.extend_gap_score}", "Calculated (Alignment)"],
+            ["Alignment Score", f"{alignment.score:.1f} (Engine: {alignment.engine})", "Calculated (Alignment)"],
+            ["Aligned Length", f"{alignment.alignment_length} columns", "Calculated (Alignment)"],
+            ["Sequence Identity (aligned cols)", f"{alignment.identity_pct:.2f}% ({alignment.identical_count}/{alignment.alignment_length}; ungapped: {alignment.identity_ungapped_pct:.2f}%)", "Calculated (Alignment)"],
+            ["Sequence Similarity (score > 0)", f"{alignment.similarity_pct:.2f}% ({alignment.similar_count}/{alignment.alignment_length})", "Calculated (Alignment)"],
+            ["Gap Count & Percentage", f"{alignment.gap_count} gap columns ({alignment.gap_pct:.2f}%)", "Calculated (Alignment)"],
         ]
-        story.append(_styled_table(aln_rows, [2.2 * inch, 3.6 * inch, 1.35 * inch]))
-        story.append(Spacer(1, 4))
-        story.append(Paragraph(alignment.interpretation, muted))
+        sec3_table = _styled_table(aln_rows, col3_widths, styles)
+        story.append(KeepTogether([sec3_head, sec3_table, Spacer(1, 4), Paragraph(_safe_xml(alignment.interpretation), styles["muted"])]))
     else:
-        story.append(Paragraph("[UNAVAILABLE] Pairwise sequence alignment was not executed in this session.", body))
+        story.append(
+            KeepTogether(
+                [
+                    sec3_head,
+                    Paragraph(
+                        "[UNAVAILABLE] No pairwise sequence alignment was performed for the current structure/report session.",
+                        styles["body"],
+                    ),
+                ]
+            )
+        )
 
-    # 4. Advanced Structural Analysis
-    story.append(Paragraph("4. Structural Stereochemistry, Secondary Structure & Contacts", h2))
+    # 4. Advanced Structural Analysis (start cleanly on new page when full structural data is present)
+    if rama is not None or ss is not None or contact_map is not None:
+        story.append(PageBreak())
+
+    chain_scope_suffix = f" (Chain {report_chain})" if report_chain and report_chain != "All" else ""
+    sec4_head = Paragraph(f"4. Structural Stereochemistry, Secondary Structure & Contacts{_safe_xml(chain_scope_suffix)}", styles["h2"])
     if rama is not None:
         rama_rows = [
-            ["Ramachandran Metric (MolProbity Top8000)", "Value", "Provenance"],
-            ["Reference Distribution", rama.reference_source, "[REFERENCE]"],
-            ["Evaluated Internal Residues", f"{rama.total_evaluated} (excluded termini/breaks: {rama.excluded_count})", "[CALCULATED]"],
-            ["Favored / Allowed / Outliers", f"{rama.favored_pct:.1f}% ({rama.favored_count}) / {rama.allowed_pct:.1f}% ({rama.allowed_count}) / {rama.outlier_pct:.1f}% ({rama.outlier_count})", "[CALCULATED]"],
-            ["Stereochemical Assessment", rama.interpretation, "[CALCULATED]"],
+            ["Ramachandran Metric", "Value", "Provenance"],
+            ["Reference Distribution", rama.reference_source, "Reference (MolProbity)"],
+            ["Chain Scope & Evaluated Residues", f"{rama.total_evaluated} internal residues evaluated (excluded termini/breaks: {rama.excluded_count})", "Calculated (Structure)"],
+            ["Favored / Allowed / Outliers", f"{rama.favored_pct:.1f}% ({rama.favored_count}) / {rama.allowed_pct:.1f}% ({rama.allowed_count}) / {rama.outlier_pct:.1f}% ({rama.outlier_count})", "Calculated (Structure)"],
+            ["Stereochemical Assessment", rama.interpretation, "Calculated (Structure)"],
         ]
-        story.append(_styled_table(rama_rows, [2.2 * inch, 3.6 * inch, 1.35 * inch]))
-        story.append(Spacer(1, 6))
-        story.append(Image(_make_ramachandran_figure(rama), width=4.0 * inch, height=3.6 * inch))
+        rama_table = _styled_table(rama_rows, col3_widths, styles)
+        story.append(KeepTogether([sec4_head, rama_table, Spacer(1, 6), Image(_make_ramachandran_figure(rama), width=3.95 * inch, height=3.40 * inch)]))
         if rama.outliers:
-            out_rows = [["Chain", "Residue", "Class", "φ (deg)", "ψ (deg)"]]
-            for o in rama.outliers[:12]:
+            out_rows = [["Chain", "Residue", "MolProbity Class", "φ (deg)", "ψ (deg)"]]
+            for o in rama.outliers[:15]:
                 out_rows.append([o.chain, f"{o.resname} {o.resseq}", o.rama_class, f"{o.phi:.1f}", f"{o.psi:.1f}"])
-            story.append(Spacer(1, 4))
-            story.append(_styled_table(out_rows, [0.9 * inch, 1.6 * inch, 1.6 * inch, 1.5 * inch, 1.55 * inch]))
+            out_table = _styled_table(
+                out_rows,
+                [0.75 * inch, 1.55 * inch, 1.80 * inch, 1.55 * inch, 1.55 * inch],
+                styles,
+            )
+            story.append(Spacer(1, 6))
+            story.append(KeepTogether([Paragraph("Ramachandran Outliers", styles["td_label"]), Spacer(1, 3), out_table]))
     else:
-        story.append(Paragraph("[UNAVAILABLE] Ramachandran analysis was not computed.", body))
+        story.append(KeepTogether([sec4_head, Paragraph("[UNAVAILABLE] Ramachandran analysis was not computed.", styles["body"])]))
 
     if ss is not None:
-        story.append(Spacer(1, 6))
+        story.append(Spacer(1, 8))
         ss_rows = [
             ["Secondary Structure Metric", "Value", "Provenance"],
-            ["Method", ss.method, "[CALCULATED]"],
-            ["Helix (H/G/I) / Sheet (E/B) / Coil & Turn", f"{ss.helix_pct:.1f}% ({ss.helix_count}) / {ss.sheet_pct:.1f}% ({ss.sheet_count}) / {ss.coil_pct:.1f}% ({ss.coil_count})", "[CALCULATED]"],
+            ["Method", ss.method, "Calculated (Structure)"],
+            ["Residues Analyzed", f"{ss.total_residues} aa", "Calculated (Structure)"],
+            ["Helix (H/G/I) / Sheet (E/B) / Coil & Turn", f"{ss.helix_pct:.1f}% ({ss.helix_count}) / {ss.sheet_pct:.1f}% ({ss.sheet_count}) / {ss.coil_pct:.1f}% ({ss.coil_count})", "Calculated (Structure)"],
         ]
         if ss.header_available and ss.header_helix_pct is not None:
             ss_rows.append([
                 "File Header HELIX/SHEET Annotation",
                 f"Helix {ss.header_helix_pct:.1f}% / Sheet {ss.header_sheet_pct:.1f}% / Coil {ss.header_coil_pct:.1f}%",
-                "[MEASURED / FILE RECORD]",
+                "Experimental (Measured)",
             ])
-        story.append(_styled_table(ss_rows, [2.2 * inch, 3.6 * inch, 1.35 * inch]))
+        story.append(_styled_table(ss_rows, col3_widths, styles))
 
     if contact_map is not None:
-        story.append(Spacer(1, 6))
+        story.append(Spacer(1, 8))
         gly_note = (
             f" (Glycine Cα fallback applied to {contact_map.glycine_fallback_count} Gly residues)"
             if contact_map.atom_mode == "CB"
@@ -356,31 +597,30 @@ def generate_pdf_report(
         )
         cm_rows = [
             ["Contact Map Metric", "Value", "Provenance"],
-            ["Chain & Mode", f"Chain {contact_map.chain_id} | {contact_map.atom_mode} atoms{gly_note}", "[CALCULATED]"],
-            ["Distance Cutoff & Seq Separation", f"≤ {contact_map.threshold_angstrom:.1f} Å | |i - j| ≥ {contact_map.min_seq_sep}", "[CALCULATED]"],
-            ["Total Contacts / Long-Range (|i-j| ≥ 12)", f"{contact_map.total_contacts} / {contact_map.long_range_contacts} (density {contact_map.contact_density_pct:.2f}%)", "[CALCULATED]"],
+            ["Chain & Mode", f"Chain {contact_map.chain_id} ({contact_map.residue_count} residues) | {contact_map.atom_mode} atoms{gly_note}", "Calculated (Structure)"],
+            ["Distance Cutoff & Seq Separation", f"<= {contact_map.threshold_angstrom:.1f} Å | |i - j| >= {contact_map.min_seq_sep} (polymer index)", "Calculated (Structure)"],
+            ["Total Contacts / Long-Range (|i-j| >= 12)", f"{contact_map.total_contacts} / {contact_map.long_range_contacts} (density {contact_map.contact_density_pct:.2f}%)", "Calculated (Structure)"],
         ]
-        story.append(_styled_table(cm_rows, [2.2 * inch, 3.6 * inch, 1.35 * inch]))
+        story.append(_styled_table(cm_rows, col3_widths, styles))
 
     sscm_img = _make_ss_and_contact_figure(ss, contact_map)
     if sscm_img is not None:
-        story.append(Spacer(1, 6))
-        w = 6.7 * inch if (ss is not None and contact_map is not None) else 4.6 * inch
-        story.append(Image(sscm_img, width=w, height=2.85 * inch))
+        story.append(Spacer(1, 8))
+        w = 6.6 * inch if (ss is not None and contact_map is not None) else 4.5 * inch
+        story.append(Image(sscm_img, width=w, height=2.75 * inch))
 
     # 5. Methodology & Limitations
-    story.append(Paragraph("5. Methodology, Software & Limitations", h2))
-    story.append(
-        Paragraph(
-            "• <b>Sequence Descriptors:</b> Biopython ProtParam (average isotopic mass, reduced cysteines, Guruprasad et al. 1990 instability index, Kyte-Doolittle 1982 hydropathy).<br/>"
-            "• <b>Pairwise Alignment:</b> Biopython PairwiseAligner / Gotoh affine-gap dynamic programming with NCBI BLOSUM/PAM matrices.<br/>"
-            "• <b>Structure Parsing & Analytics:</b> Model-1 primary-conformer parsing (PDB & mmCIF), Richardson Lab MolProbity Top8000 6-class Ramachandran distributions (CC BY 4.0; Williams et al. 2018; Lovell et al. 2003), Kabsch-Sander (1983) electrostatic H-bond secondary structure, and Euclidean Cα/Cβ contact maps (Glycine Cα fallback in Cβ mode).<br/>"
-            "• <b>Limitations:</b> Predicted structures (AlphaFold DB / ESMFold) are computational hypotheses rather than experimental coordinates. Sequence-based heuristics (e.g., instability index) do not guarantee in vitro stability. Full crystallographic refinement validation requires external tools such as MolProbity or RCSB validation reports.",
-            muted,
-        )
+    sec5_head = Paragraph("5. Methodology, Software & Limitations", styles["h2"])
+    sec5_body = Paragraph(
+        "• <b>Sequence Descriptors:</b> Biopython ProtParam (average isotopic mass, reduced cysteines, Guruprasad et al. 1990 instability index, Kyte-Doolittle 1982 hydropathy).<br/>"
+        "• <b>Pairwise Alignment:</b> Biopython PairwiseAligner / Gotoh affine-gap dynamic programming with NCBI BLOSUM/PAM matrices.<br/>"
+        "• <b>Structure Parsing &amp; Analytics:</b> Model-1 primary-conformer parsing (PDB &amp; mmCIF), Richardson Lab MolProbity Top8000 6-class Ramachandran distributions (CC BY 4.0; Williams et al. 2018; Lovell et al. 2003), Kabsch-Sander (1983) electrostatic H-bond secondary structure, and Euclidean Cα/Cβ contact maps (Glycine Cα fallback in Cβ mode).<br/>"
+        "• <b>Limitations:</b> Predicted structures (AlphaFold DB / ESMFold) are computational hypotheses rather than experimental coordinates. Sequence-based heuristics (e.g., instability index) do not guarantee in vitro stability. Full crystallographic refinement validation requires external tools such as MolProbity or RCSB validation reports.",
+        styles["muted"],
     )
+    story.append(KeepTogether([sec5_head, sec5_body]))
 
-    doc.build(story)
+    doc.build(story, onFirstPage=_draw_page_footer, onLaterPages=_draw_page_footer)
     return buffer.getvalue()
 
 
@@ -391,6 +631,11 @@ def generate_text_report(
     rama: RamachandranResult | None = None,
     ss: SecondaryStructureResult | None = None,
     contact_map: ContactMapResult | None = None,
+    sequence_name: str | None = None,
+    sequence_source: str | None = None,
+    sequence_mismatch_warning: str | None = None,
+    sequence_unavailable_reason: str | None = None,
+    report_chain: str | None = None,
 ) -> str:
     """Build a structured plain-text summary report preserving legacy .txt export."""
     lines = [
@@ -408,8 +653,8 @@ def generate_text_report(
             f"PDB ID: {parsed.pdb_id or 'Unavailable'}",
             f"Method: {parsed.experimental_method or 'Unavailable'}",
             f"Resolution: {f'{parsed.resolution_angstrom:.2f} A' if parsed.resolution_angstrom is not None else 'Unavailable'}",
-            f"Chains: {', '.join(parsed.chains)} ({parsed.polymer_residue_count} polymer residues, {parsed.polymer_atom_count} atoms in Model 1)",
-            f"Hetero ligands: {parsed.hetero_ligand_count} | Waters: {parsed.water_count}",
+            f"Chains: {', '.join(parsed.chains)} ({parsed.polymer_residue_count} polymer residues, {parsed.polymer_atom_count} protein atoms in Model 1)",
+            f"Waters: {parsed.water_count} | Hetero ligands: {parsed.hetero_ligand_count} ({', '.join(parsed.hetero_ligand_names) or 'none'})",
             f"Missing residues: {parsed.missing_residue_note}",
         ]
         if parsed.is_predicted and parsed.plddt_stats:
@@ -418,27 +663,58 @@ def generate_text_report(
                 f"(scale: {parsed.plddt_stats['raw_scale']})"
             )
         elif parsed.bfactor_stats:
-            lines.append(f"[MEASURED] Mean B-factor: {parsed.bfactor_stats['mean']:.2f} A^2")
+            bs = parsed.bfactor_stats
+            line = f"[MEASURED] Mean CA B-factor: {bs['mean']:.2f} A^2"
+            if "all_atom_mean" in bs:
+                line += (
+                    f" | All-atom ({bs['all_atom_count']} atoms): mean {bs['all_atom_mean']:.2f} A^2 "
+                    f"(range {bs['all_atom_min']:.2f}-{bs['all_atom_max']:.2f})"
+                    f" | Occupancy: {bs['occupancy_min']:.2f}-{bs['occupancy_max']:.2f}"
+                )
+            lines.append(line)
         lines.append("")
 
     if seq_profile is not None:
         lines += [
             "SEQUENCE METRICS [CALCULATED]",
+            f"Sequence Source: {_format_seq_source_label(sequence_source, report_chain)}",
+            f"Sequence Label: {sequence_name or 'Active sequence'}",
+        ]
+        if sequence_mismatch_warning:
+            lines.append(f"WARNING: {sequence_mismatch_warning}")
+        lines += [
             f"Length: {seq_profile.length} aa",
             f"Molecular Weight: {seq_profile.molecular_weight_da:.2f} Da",
             f"Theoretical pI: {seq_profile.theoretical_pi:.2f}",
             f"Aromaticity: {seq_profile.aromaticity:.3f}",
             f"Instability Index: {seq_profile.instability_index:.2f} ({seq_profile.instability_class})",
             f"GRAVY: {seq_profile.gravy:.3f}",
+            f"Extinction (280 nm, red/ox): {seq_profile.extinction_reduced} / {seq_profile.extinction_oxidized} M^-1 cm^-1",
             f"Sequence: {seq_profile.sequence}",
+            "",
+        ]
+    else:
+        reason = sequence_unavailable_reason or "No valid standard amino-acid sequence was analyzed."
+        lines += [
+            "SEQUENCE METRICS [UNAVAILABLE]",
+            f"Reason: {reason}",
             "",
         ]
 
     if alignment is not None:
         lines += [
             "PAIRWISE ALIGNMENT [CALCULATED]",
-            f"Mode: {alignment.mode} | Matrix: {alignment.matrix_name} | Score: {alignment.score:.1f}",
+            f"Seq A: {alignment.seq1_name} (Accession: {alignment.seq1_accession or 'None'}, {alignment.seq1_length} aa)",
+            f"Seq B: {alignment.seq2_name} (Accession: {alignment.seq2_accession or 'None'}, {alignment.seq2_length} aa)",
+            f"Mode: {alignment.mode} | Matrix: {alignment.matrix_name} | Open={alignment.open_gap_score} | Extend={alignment.extend_gap_score}",
+            f"Score: {alignment.score:.1f} | Aligned Length: {alignment.alignment_length} cols | Gap Count: {alignment.gap_count}",
             f"Identity: {alignment.identity_pct:.2f}% | Similarity: {alignment.similarity_pct:.2f}% | Gaps: {alignment.gap_pct:.2f}%",
+            "",
+        ]
+    else:
+        lines += [
+            "PAIRWISE ALIGNMENT [UNAVAILABLE]",
+            "No pairwise sequence alignment was performed for the current structure/report session.",
             "",
         ]
 

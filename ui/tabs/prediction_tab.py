@@ -13,17 +13,21 @@ from bio3d.prediction import (
 )
 from bio3d.sequence import validate_sequence
 from bio3d.structure import parse_structure
+from ui.state import ActiveSequenceContext, set_active_structure
 
 
 def _load_into_workspace(pdb_text: str, filename: str, origin_hint: str) -> None:
-    st.session_state["structure_raw"] = pdb_text
-    st.session_state["structure_filename"] = filename
-    st.session_state["structure_origin_hint"] = origin_hint
-    st.session_state["structure_error"] = None
-    st.session_state["main_nav_section"] = "3D Explorer"
+    set_active_structure(
+        pdb_text,
+        filename,
+        origin_hint,
+        nav_target="3D Explorer",
+        reset_sequence_mode=True,
+    )
 
 
-def render_prediction_tab(active_sequence: str) -> None:
+def render_prediction_tab(seq_ctx: ActiveSequenceContext) -> None:
+    active_sequence = seq_ctx.sequence
     st.warning(
         "Computational predictions (AlphaFold DB and ESMFold) are structural hypotheses rather than experimentally determined coordinates. "
         "Always inspect residue-level pLDDT confidence scores and verify stereochemistry before drawing biological conclusions.",
@@ -43,6 +47,7 @@ def render_prediction_tab(active_sequence: str) -> None:
                 "UniProt accession",
                 value="P0CG48",
                 help="Examples: P0CG48 (Polyubiquitin), P69905 (Hemoglobin subunit alpha), P04637 (TP53).",
+                key="af_uniprot_input",
             )
             if st.button("Fetch AlphaFold model", type="primary", width="stretch", key="btn_af_fetch"):
                 with st.spinner(f"Querying AlphaFold DB for {uniprot_in.upper()}..."):
@@ -95,10 +100,13 @@ def render_prediction_tab(active_sequence: str) -> None:
                 f"Submits a single chain ({MIN_ESMFOLD_RESIDUES}–{MAX_ESMFOLD_RESIDUES} standard amino acids) to the public ESM Atlas API. "
                 "Typical runtime is 10–45 seconds; public endpoints may rate-limit."
             )
-            if "esm_seq_input" not in st.session_state:
-                st.session_state["esm_seq_input"] = active_sequence or ""
+            st.session_state.setdefault("esm_seq_input", active_sequence or "")
 
-            if active_sequence and st.button("Copy active sidebar sequence", width="stretch", key="btn_copy_esm"):
+            if active_sequence and st.button(
+                f"Copy active sequence ({seq_ctx.label})",
+                width="stretch",
+                key="btn_copy_esm",
+            ):
                 st.session_state["esm_seq_input"] = active_sequence
                 st.rerun()
 

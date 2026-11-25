@@ -19,6 +19,8 @@ from bio3d.structure import ParsedStructure
 
 def render_structure_tab(
     parsed: ParsedStructure | None,
+    struct_hash: str,
+    origin_hint: str | None,
     cached_rama_fn,
     cached_ss_fn,
     cached_cmap_fn,
@@ -29,7 +31,13 @@ def render_structure_tab(
 
     top_c1, top_c2 = st.columns([1.3, 2.7], vertical_alignment="bottom")
     chain_options = ["All"] + parsed.chains
-    selected_chain = top_c1.selectbox("Chain scope (Ramachandran & Secondary Structure)", chain_options, index=0)
+    if st.session_state.get("struct_chain_scope") not in chain_options:
+        st.session_state["struct_chain_scope"] = "All"
+    selected_chain = top_c1.selectbox(
+        "Chain scope (Ramachandran & Secondary Structure)",
+        chain_options,
+        key="struct_chain_scope",
+    )
     sub_view = top_c2.segmented_control(
         "Analysis module",
         options=["Structure Quality", "Ramachandran Plot", "Secondary Structure", "Contact Map"],
@@ -78,19 +86,23 @@ def render_structure_tab(
             bs = parsed.bfactor_stats
             st.markdown("##### Crystallographic / experimental B-factor distribution (Å²)")
             b1, b2, b3, b4 = st.columns(4)
-            b1.metric("Mean B-factor", f"{bs['mean']:.2f} Å²")
-            b2.metric("Median B-factor", f"{bs['median']:.2f} Å²")
-            b3.metric("Min", f"{bs['min']:.2f} Å²")
-            b4.metric("Max", f"{bs['max']:.2f} Å²")
+            b1.metric("Mean Cα B-factor", f"{bs['mean']:.2f} Å²")
+            b2.metric("Cα Range", f"{bs['min']:.2f}–{bs['max']:.2f} Å²")
+            if "all_atom_mean" in bs:
+                b3.metric("All-atom B mean", f"{bs['all_atom_mean']:.2f} Å²", delta=f"{bs['all_atom_min']:.2f}–{bs['all_atom_max']:.2f}")
+                b4.metric("Occupancy (col 55–60)", f"{bs['occupancy_min']:.2f}–{bs['occupancy_max']:.2f}")
+            else:
+                b3.metric("Min", f"{bs['min']:.2f} Å²")
+                b4.metric("Max", f"{bs['max']:.2f} Å²")
             st.caption(
-                "Experimental atomic displacement parameters (B-factors in Å²) reflect local thermal motion or static disorder; "
-                "they are distinct from AlphaFold/ESMFold pLDDT confidence scores."
+                "Experimental atomic displacement parameters (B-factors in PDB cols 61–66, Å²) are tracked separately from "
+                "atomic occupancies (PDB cols 55–60) and are never relabeled as AlphaFold/ESMFold pLDDT scores."
             )
             st.plotly_chart(plot_bfactor_profile(bs), width="stretch")
 
     elif sub_view == "Ramachandran Plot":
         with st.spinner("Computing backbone φ/ψ dihedral angles..."):
-            rama = cached_rama_fn(parsed.raw_text, parsed.filename, selected_chain)
+            rama = cached_rama_fn(struct_hash, parsed.raw_text, parsed.filename, origin_hint, selected_chain)
 
         r1, r2, r3, r4 = st.columns(4)
         r1.metric("Evaluated residues", f"{rama.total_evaluated}", delta=f"{rama.excluded_count} termini/breaks excluded")
@@ -123,7 +135,7 @@ def render_structure_tab(
             )
             st.dataframe(out_df, width="stretch", hide_index=True)
         else:
-            st.success("Zero Ramachandran outliers detected under Lovell et al. (2003) 4-class criteria.")
+            st.success("Zero Ramachandran outliers detected under MolProbity Top8000 6-class criteria (Williams et al. 2018; Lovell et al. 2003).")
 
         with st.expander("Biological relevance of Ramachandran analysis", expanded=False):
             st.markdown(
@@ -134,7 +146,7 @@ def render_structure_tab(
 
     elif sub_view == "Secondary Structure":
         with st.spinner("Computing Kabsch-Sander backbone hydrogen-bond secondary structure..."):
-            ss = cached_ss_fn(parsed.raw_text, parsed.filename, selected_chain)
+            ss = cached_ss_fn(struct_hash, parsed.raw_text, parsed.filename, origin_hint, selected_chain)
 
         s1, s2, s3, s4 = st.columns(4)
         s1.metric("Residues analyzed", f"{ss.total_residues}")
@@ -172,13 +184,34 @@ def render_structure_tab(
 
     else:  # Contact Map
         c_col1, c_col2, c_col3, c_col4 = st.columns(4)
-        cm_chain = c_col1.selectbox("Chain", parsed.chains, index=0, key="cm_chain_select")
-        atom_mode = c_col2.segmented_control("Atom anchor", ["CA", "CB"], default="CA") or "CA"
-        cutoff = c_col3.slider("Contact threshold (Å)", min_value=4.0, max_value=15.0, value=8.0, step=0.5)
-        min_sep = c_col4.slider("Min seq separation |i-j|", min_value=1, max_value=24, value=6, step=1)
+        if st.session_state.get("cm_chain_select") not in parsed.chains:
+            st.session_state["cm_chain_select"] = parsed.chains[0]
+        cm_chain = c_col1.selectbox("Chain", parsed.chains, key="cm_chain_select")
+        st.session_state.setdefault("cm_atom_mode", "CA")
+        atom_mode = c_col2.segmented_control("Atom anchor", ["CA", "CB"], key="cm_atom_mode") or "CA"
+        st.session_state.setdefault("cm_cutoff", 8.0)
+        cutoff = c_col3.slider("Contact threshold (Å)", min_value=4.0, max_value=15.0, step=0.5, key="cm_cutoff")
+        st.session_state.setdefault("cm_min_sep", 6)
+        min_sep = c_col4.slider("Min seq separation |i-j|", min_value=1, max_value=24, step=1, key="cm_min_sep")
+        st.session_state["active_cm_params"] = {
+            "structure_fp": struct_hash,
+            "chain": cm_chain,
+            "atom_mode": atom_mode,
+            "cutoff": float(cutoff),
+            "min_seq_sep": int(min_sep),
+        }
 
         with st.spinner("Calculating residue-residue distance matrix..."):
-            cmap = cached_cmap_fn(parsed.raw_text, parsed.filename, cm_chain, atom_mode, float(cutoff), int(min_sep))
+            cmap = cached_cmap_fn(
+                struct_hash,
+                parsed.raw_text,
+                parsed.filename,
+                origin_hint,
+                cm_chain,
+                atom_mode,
+                float(cutoff),
+                int(min_sep),
+            )
 
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Residues mapped", f"{cmap.residue_count}")

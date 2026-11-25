@@ -62,7 +62,9 @@ def render_viewer_tab(parsed: ParsedStructure | None) -> None:
         color_mode: ColorMode = st.selectbox("Color scheme", color_options, index=0)  # type: ignore[assignment]
 
         chain_choices = ["All"] + parsed.chains
-        selected_chain = st.selectbox("Focus chain", chain_choices, index=0)
+        if st.session_state.get("viewer_focus_chain") not in chain_choices:
+            st.session_state["viewer_focus_chain"] = "All"
+        selected_chain = st.selectbox("Focus chain", chain_choices, key="viewer_focus_chain")
 
         c_surf, c_lig = st.columns(2)
         show_surface = c_surf.toggle("Surface", value=False)
@@ -75,10 +77,11 @@ def render_viewer_tab(parsed: ParsedStructure | None) -> None:
                 surface_opacity = st.slider("Surface opacity", 0.15, 0.95, 0.65, 0.05)
 
         st.markdown("#### Residue Highlighting")
+        st.session_state.setdefault("viewer_hi_text", "")
         hi_text = st.text_input(
             "Residue numbers (e.g. 25, 44-48)",
-            value="",
             placeholder="e.g. 16, 44-48",
+            key="viewer_hi_text",
         )
         hi_ids = _parse_residue_selection(hi_text)
         c_lbl, c_zm = st.columns(2)

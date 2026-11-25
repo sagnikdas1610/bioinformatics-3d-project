@@ -9,7 +9,7 @@ from typing import Literal
 
 import numpy as np
 
-from bio3d.config import AA3_TO_AA1, STANDARD_RESIDUE_NAMES, WATER_RESIDUE_NAMES
+from bio3d.config import AA3_TO_AA1, MODIFIED_AA3_TO_AA1, STANDARD_RESIDUE_NAMES, WATER_RESIDUE_NAMES
 
 
 @dataclass
@@ -81,6 +81,9 @@ class ParsedStructure:
     bfactor_stats: dict[str, object] | None
     plddt_stats: dict[str, object] | None
     file_size_kib: float
+    modified_residues_mapped: dict[str, list[str]] = field(default_factory=dict)
+    unmapped_polymer_residues: dict[str, list[str]] = field(default_factory=dict)
+    chain_extraction_notes: dict[str, str] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
 
@@ -254,10 +257,15 @@ def _parse_pdb_records(raw_text: str) -> dict[str, object]:
             element = line[76:78].strip().upper() if len(line) >= 78 else ""
 
             is_water = resname in WATER_RESIDUE_NAMES
-            is_polymer = (rec == "ATOM" and resname in STANDARD_RESIDUE_NAMES) or (
-                rec == "HETATM" and resname == "MSE"
-            )
-            bucket = "poly" if is_polymer else ("water" if is_water else "het")
+            if is_water:
+                bucket = "water"
+            elif rec == "ATOM":
+                bucket = "poly" if resname in AA3_TO_AA1 else "unmapped_poly"
+            elif resname in MODIFIED_AA3_TO_AA1:
+                bucket = "mod_het"
+            else:
+                bucket = "het"
+            is_polymer = bucket == "poly"
             key = (bucket, chain, resseq, icode, resname)
 
             if key not in residue_map:
@@ -520,10 +528,15 @@ def _parse_cif_records(raw_text: str) -> dict[str, object]:
                 elem = r[c_elem].strip().upper() if c_elem is not None and r[c_elem] not in {".", "?"} else ""
 
                 is_water = resname in WATER_RESIDUE_NAMES
-                is_polymer = (rec == "ATOM" and resname in STANDARD_RESIDUE_NAMES) or (
-                    rec == "HETATM" and resname == "MSE"
-                )
-                bucket = "poly" if is_polymer else ("water" if is_water else "het")
+                if is_water:
+                    bucket = "water"
+                elif rec == "ATOM":
+                    bucket = "poly" if resname in AA3_TO_AA1 else "unmapped_poly"
+                elif resname in MODIFIED_AA3_TO_AA1:
+                    bucket = "mod_het"
+                else:
+                    bucket = "het"
+                is_polymer = bucket == "poly"
                 key = (bucket, chain, resseq, icode, resname)
                 if key not in residue_map:
                     residue_order.append(key)
@@ -606,12 +619,36 @@ def parse_structure(
     polymer_residues: dict[str, list[ResidueRecord]] = {}
     hetero_ligands: list[ResidueRecord] = []
     water_count = 0
+    modified_residues_mapped: dict[str, list[str]] = {}
+    unmapped_polymer_residues: dict[str, list[str]] = {}
 
     for key in residue_order:
         bucket, chain, _, _, _ = key
         res = residue_map[key]
         if bucket == "poly":
             polymer_residues.setdefault(chain, []).append(res)
+            if res.resname in MODIFIED_AA3_TO_AA1:
+                modified_residues_mapped.setdefault(chain, []).append(
+                    f"{res.resname}->{res.aa1} ({res.resseq}{res.icode})"
+                )
+        elif bucket == "mod_het":
+            # Promote HETATM modified amino acids only when integrated with peptide backbone atoms
+            if {"N", "CA", "C"}.issubset(res.atoms) or (res.resname == "MSE" and "CA" in res.atoms):
+                res.is_hetero = False
+                polymer_residues.setdefault(chain, []).append(res)
+                modified_residues_mapped.setdefault(chain, []).append(
+                    f"{res.resname}->{res.aa1} ({res.resseq}{res.icode})"
+                )
+            else:
+                hetero_ligands.append(res)
+        elif bucket == "unmapped_poly":
+            if "CA" in res.atoms or {"N", "C"}.issubset(res.atoms) or res.resname == "UNK":
+                polymer_residues.setdefault(chain, []).append(res)
+                unmapped_polymer_residues.setdefault(chain, []).append(
+                    f"{res.resname} {res.resseq}{res.icode}"
+                )
+            else:
+                hetero_ligands.append(res)
         elif bucket == "water":
             water_count += 1
         else:
@@ -626,6 +663,26 @@ def parse_structure(
     chain_sequences = {
         chain: "".join(r.aa1 for r in res_list) for chain, res_list in polymer_residues.items()
     }
+    chain_extraction_notes: dict[str, str] = {}
+    for ch in chains:
+        unmapped = unmapped_polymer_residues.get(ch, [])
+        mods = modified_residues_mapped.get(ch, [])
+        res_len = len(polymer_residues[ch])
+        if unmapped:
+            preview = ", ".join(unmapped[:5]) + ("..." if len(unmapped) > 5 else "")
+            chain_extraction_notes[ch] = (
+                f"Chain {ch} contains {len(unmapped)} unmapped polymer residue(s) ({preview}); "
+                "standard 20-amino-acid physicochemical properties cannot be calculated without fabricating residue identity."
+            )
+        elif mods:
+            preview = ", ".join(mods[:5]) + ("..." if len(mods) > 5 else "")
+            chain_extraction_notes[ch] = (
+                f"Chain {ch}: {res_len} aa extracted with {len(mods)} modified residue(s) mapped to canonical parent ({preview})."
+            )
+        else:
+            chain_extraction_notes[ch] = (
+                f"Chain {ch}: {res_len} standard amino-acid residues extracted cleanly from Model 1 coordinates."
+            )
     hetero_names = sorted({r.resname for r in hetero_ligands})
 
     origin, is_predicted = _infer_origin(
@@ -678,6 +735,20 @@ def parse_structure(
                 "per_residue": per_res_scores,
             }
         else:
+            all_atom_b = [
+                atom.bfactor
+                for ch in chains
+                for r in polymer_residues[ch]
+                for atom in r.atoms.values()
+            ]
+            all_atom_occ = [
+                atom.occupancy
+                for ch in chains
+                for r in polymer_residues[ch]
+                for atom in r.atoms.values()
+            ]
+            b_all_arr = np.array(all_atom_b, dtype=np.float64) if all_atom_b else arr
+            occ_arr = np.array(all_atom_occ, dtype=np.float64) if all_atom_occ else np.array([1.0])
             bfactor_stats = {
                 "min": float(np.min(arr)),
                 "p5": float(np.percentile(arr, 5)),
@@ -685,6 +756,14 @@ def parse_structure(
                 "mean": float(np.mean(arr)),
                 "p95": float(np.percentile(arr, 95)),
                 "max": float(np.max(arr)),
+                "all_atom_count": int(len(b_all_arr)),
+                "all_atom_min": float(np.min(b_all_arr)),
+                "all_atom_median": float(np.median(b_all_arr)),
+                "all_atom_mean": float(np.mean(b_all_arr)),
+                "all_atom_max": float(np.max(b_all_arr)),
+                "occupancy_min": float(np.min(occ_arr)),
+                "occupancy_max": float(np.max(occ_arr)),
+                "occupancy_mean": float(np.mean(occ_arr)),
                 "per_residue": per_res_scores,
             }
 
@@ -743,5 +822,8 @@ def parse_structure(
         bfactor_stats=bfactor_stats,
         plddt_stats=plddt_stats,
         file_size_kib=len(raw_text.encode("utf-8")) / 1024.0,
+        modified_residues_mapped=modified_residues_mapped,
+        unmapped_polymer_residues=unmapped_polymer_residues,
+        chain_extraction_notes=chain_extraction_notes,
         warnings=warnings,
     )

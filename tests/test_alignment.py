@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from bio3d.alignment import format_alignment_blocks, run_pairwise_alignment
+from bio3d.alignment import format_alignment_blocks, parse_sequence_identity, run_pairwise_alignment
 from bio3d.config import HBA_HUMAN_SEQ, HBB_HUMAN_SEQ
 
 
@@ -56,3 +56,17 @@ def test_hemoglobin_alpha_beta_alignment():
 def test_invalid_gap_penalty_raises():
     with pytest.raises(ValueError):
         run_pairwise_alignment("MKTA", "MKTA", open_gap_score=5.0)
+
+
+def test_parse_sequence_identity_extracts_accessions():
+    n1, a1 = parse_sequence_identity("sp|P69905|HBA_HUMAN Hemoglobin subunit alpha OS=Homo sapiens")
+    assert a1 == "P69905"
+    assert "HBA_HUMAN" in n1
+
+    n2, a2 = parse_sequence_identity("1UBQ_chain_A")
+    assert a2 == "1UBQ"
+    assert n2 == "1UBQ_chain_A"
+
+    n3, a3 = parse_sequence_identity("Pasted sequence", fallback_name="Sequence 1")
+    assert n3 == "Sequence 1"
+    assert a3 is None

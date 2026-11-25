@@ -57,3 +57,48 @@ def test_contact_map_glycine_cb_fallback_to_ca():
     cmap_ca = compute_contact_map(parsed, chain_id="A", atom_mode="CA", threshold_angstrom=8.0, min_seq_sep=6)
     assert cmap_ca.glycine_fallback_count == 0
     assert cmap_ca.residue_count == 76
+
+
+def test_contact_map_matches_independent_bruteforce_pdb_atoms():
+    """Independently compute CA and CB (Gly->CA) distances directly from PDB ATOM lines."""
+    import math
+
+    lines = (DATA_DIR / "1ubq_ubiquitin.pdb").read_text(encoding="utf-8").splitlines()
+    residues: dict[tuple[int, str], dict[str, tuple[float, float, float]]] = {}
+    for line in lines:
+        if not line.startswith("ATOM  "):
+            continue
+        alt = line[16:17].strip()
+        if alt not in {"", "A"}:
+            continue
+        if line[21:22].strip() != "A":
+            continue
+        aname = line[12:16].strip()
+        if aname not in {"CA", "CB"}:
+            continue
+        resseq = int(line[22:26].strip())
+        resname = line[17:20].strip()
+        xyz = (float(line[30:38]), float(line[38:46]), float(line[46:54]))
+        residues.setdefault((resseq, resname), {})[aname] = xyz
+
+    ordered = [residues[k] for k in sorted(residues.keys())]
+    assert len(ordered) == 76
+
+    for mode in ("CA", "CB"):
+        pts = []
+        for atoms in ordered:
+            pts.append(atoms["CB"] if (mode == "CB" and "CB" in atoms) else atoms["CA"])
+        bf_total = 0
+        bf_long = 0
+        for i in range(len(pts)):
+            for j in range(i + 6, len(pts)):
+                d = math.dist(pts[i], pts[j])
+                if d <= 8.0:
+                    bf_total += 1
+                    if j - i >= 12:
+                        bf_long += 1
+
+        parsed = parse_structure((DATA_DIR / "1ubq_ubiquitin.pdb").read_text(encoding="utf-8"), "1ubq_ubiquitin.pdb")
+        cmap = compute_contact_map(parsed, chain_id="A", atom_mode=mode, threshold_angstrom=8.0, min_seq_sep=6)
+        assert cmap.total_contacts == bf_total
+        assert cmap.long_range_contacts == bf_long

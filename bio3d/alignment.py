@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from html import escape
 from pathlib import Path
+import re
 from typing import Literal
 
 import Bio
@@ -43,6 +44,41 @@ class AlignmentResult:
     seq2_length: int
     engine: str
     interpretation: str
+    seq1_name: str = "Sequence 1"
+    seq1_accession: str | None = None
+    seq2_name: str = "Sequence 2"
+    seq2_accession: str | None = None
+
+
+def parse_sequence_identity(header: str, fallback_name: str = "Sequence") -> tuple[str, str | None]:
+    """Extract a clean sequence display name and genuine accession ID from a FASTA header."""
+    raw = (header or "").strip().lstrip(">").strip()
+    if not raw or raw in {"Pasted sequence", "Sequence"}:
+        return fallback_name, None
+
+    # UniProt pipe format: sp|P69905|HBA_HUMAN Hemoglobin subunit alpha ...
+    m_uniprot = re.match(r"^(?:sp|tr)\|([A-Z0-9]{6,10})\|([^\s]+)(?:\s+(.*))?$", raw, re.IGNORECASE)
+    if m_uniprot:
+        acc = m_uniprot.group(1).upper()
+        entry = m_uniprot.group(2)
+        desc = (m_uniprot.group(3) or "").strip()
+        short_desc = desc.split(" OS=")[0].strip() if desc else ""
+        name = f"{entry} ({short_desc})" if short_desc else entry
+        return name, acc
+
+    # Prefixed PDB/UniProt/RefSeq tokens in header (e.g., 1UBQ_chain_A, AF-P69905-F1, NP_000509.1)
+    first_tok = raw.split()[0]
+    m_af = re.search(r"\bAF-([A-Z0-9]{6,10})-F\d+\b", raw, re.IGNORECASE)
+    if m_af:
+        return raw, m_af.group(1).upper()
+    m_pdb = re.match(r"^([A-Z0-9]{4})(?:[_:|].*)?$", first_tok, re.IGNORECASE)
+    if m_pdb and any(ch.isdigit() for ch in m_pdb.group(1)):
+        return raw, m_pdb.group(1).upper()
+    m_acc = re.match(r"^([OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9](?:[A-Z][A-Z0-9]{2}[0-9]){1,2}|[NX]P_[0-9]+(?:\.[0-9]+)?)$", first_tok, re.IGNORECASE)
+    if m_acc:
+        return raw, m_acc.group(1).upper()
+
+    return raw, None
 
 
 def _load_plain_matrix(matrix_name: str) -> dict[tuple[str, str], float]:
@@ -315,6 +351,10 @@ def run_pairwise_alignment(
     matrix_name: str = "BLOSUM62",
     open_gap_score: float = -10.0,
     extend_gap_score: float = -0.5,
+    seq1_name: str = "Sequence 1",
+    seq1_accession: str | None = None,
+    seq2_name: str = "Sequence 2",
+    seq2_accession: str | None = None,
 ) -> AlignmentResult:
     """Run Needleman-Wunsch (global) or Smith-Waterman (local) pairwise alignment."""
     v1 = validate_sequence(seq1)
@@ -428,6 +468,10 @@ def run_pairwise_alignment(
         interpretation=_interpret_alignment(
             mode, identity_pct, similarity_pct, aligned_pairs, matrix_name
         ),
+        seq1_name=seq1_name,
+        seq1_accession=seq1_accession,
+        seq2_name=seq2_name,
+        seq2_accession=seq2_accession,
     )
 
 

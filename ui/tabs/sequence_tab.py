@@ -14,38 +14,37 @@ from bio3d.sequence import (
     validate_sequence,
 )
 from bio3d.structure import ParsedStructure
+from ui.state import ActiveSequenceContext, compute_sequence_fingerprint
 
 
 def render_sequence_tab(
-    sequence: str,
-    sequence_label: str,
+    seq_ctx: ActiveSequenceContext,
     parsed: ParsedStructure | None,
     cached_analyze_fn,
 ) -> SequenceProfile | None:
-    validation = validate_sequence(sequence)
+    if seq_ctx.mismatch_warning:
+        st.warning(seq_ctx.mismatch_warning, icon=":material/warning:")
+
+    validation = validate_sequence(seq_ctx.sequence)
     if not validation.is_valid:
-        st.warning(validation.message)
+        reason_parts = [p for p in (seq_ctx.extraction_note, validation.message) if p]
+        st.error("Sequence analytics unavailable: " + " ".join(reason_parts))
         return None
 
     if validation.stripped_stop_codon:
         st.info(validation.message)
 
-    # Warn cleanly if active sequence does not match any chain in the currently loaded 3D structure
-    if parsed is not None:
-        matched_chains = [
-            ch for ch, ch_seq in parsed.chain_sequences.items() if ch_seq == validation.cleaned_sequence
-        ]
-        if matched_chains:
-            st.caption(
-                f"Sequence `{sequence_label}` matches loaded structure chain(s): **{', '.join(matched_chains)}**."
-            )
-        else:
-            st.info(
-                f"Active sequence (`{sequence_label}`, {validation.length} aa) differs from the chains in "
-                f"`{parsed.filename}`. Use **Sync sequence from structure** in the sidebar to analyze a PDB chain directly."
-            )
+    source_badge = (
+        f"Derived directly from loaded structure **{parsed.pdb_id or parsed.filename} · Chain {seq_ctx.chain_id}**"
+        if seq_ctx.source == "structure" and parsed is not None
+        else f"Independent custom FASTA input (`{seq_ctx.label}`)"
+    )
+    st.caption(f"Sequence origin: {source_badge} · Length: **{validation.length} aa**")
+    if seq_ctx.extraction_note and seq_ctx.source == "structure":
+        st.caption(seq_ctx.extraction_note)
 
-    profile: SequenceProfile = cached_analyze_fn(validation.cleaned_sequence)
+    seq_hash = compute_sequence_fingerprint(validation.cleaned_sequence)
+    profile: SequenceProfile = cached_analyze_fn(seq_hash, validation.cleaned_sequence)
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Sequence length", f"{profile.length:,} aa")

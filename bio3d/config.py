@@ -18,7 +18,7 @@ MIN_ESMFOLD_RESIDUES = 10
 STANDARD_AA = "ACDEFGHIKLMNPQRSTVWY"
 STANDARD_AA_SET = frozenset(STANDARD_AA)
 
-AA3_TO_AA1: dict[str, str] = {
+CANONICAL_AA3_TO_AA1: dict[str, str] = {
     "ALA": "A",
     "CYS": "C",
     "ASP": "D",
@@ -39,13 +39,39 @@ AA3_TO_AA1: dict[str, str] = {
     "VAL": "V",
     "TRP": "W",
     "TYR": "Y",
-    # Common protonation / selenomethionine mappings for polymer continuity
+}
+
+MODIFIED_AA3_TO_AA1: dict[str, str] = {
+    # Common protonation / disulfide / selenomethionine / PTM polymer residues -> canonical parent AA
     "MSE": "M",
+    "MSO": "M",
+    "SEC": "C",
     "HID": "H",
     "HIE": "H",
     "HIP": "H",
+    "HSD": "H",
+    "HSE": "H",
+    "HSP": "H",
     "CYX": "C",
+    "CYM": "C",
+    "CSO": "C",
+    "CSD": "C",
+    "CME": "C",
+    "OCS": "C",
+    "CSS": "C",
+    "SEP": "S",
+    "TPO": "T",
+    "PTR": "Y",
+    "TYS": "Y",
+    "HYP": "P",
+    "PCA": "E",
+    "KCX": "K",
+    "MLY": "K",
+    "ALY": "K",
+    "M3L": "K",
 }
+
+AA3_TO_AA1: dict[str, str] = {**CANONICAL_AA3_TO_AA1, **MODIFIED_AA3_TO_AA1}
 
 STANDARD_RESIDUE_NAMES = frozenset(AA3_TO_AA1.keys())
 WATER_RESIDUE_NAMES = frozenset({"HOH", "WAT", "DOD", "H2O"})
@@ -139,6 +165,11 @@ BUNDLED_STRUCTURES: dict[str, dict[str, str]] = {
         "pdb_id": "1CRN",
         "path": str(DATA_DIR / "1crn_crambin.pdb"),
         "description": "Ultra-high-resolution X-ray structure of plant seed protein crambin (PDB: 1CRN).",
+    },
+    "1LYZ — Hen Egg-White Lysozyme (129 aa, 2.00 Å)": {
+        "pdb_id": "1LYZ",
+        "path": str(DATA_DIR / "1lyz_lysozyme.pdb"),
+        "description": "Hen egg-white lysozyme crystal structure from RCSB PDB (PDB: 1LYZ).",
     },
 }
 
